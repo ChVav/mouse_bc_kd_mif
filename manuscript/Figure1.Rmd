@@ -1,0 +1,282 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, inputenc, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(survival)
+library(tidyverse)
+library(patchwork)
+library(lubridate)
+library(GGally)
+library(survminer)
+library(reshape)
+library(cowplot)
+library(interactionR)
+
+cols2 <- c('#6699CC',
+           '#CC6677')
+
+cols8 <- rev(c('#888888',
+               '#a8dbd9',
+               '#4f90a6',
+               '#2a5674',
+               '#fcde9c',
+               '#f0746e',
+               '#dc3977',
+               '#7c1d6f'))
+
+```
+
+```{r, fig.height=6, fig.width=8}
+
+# ---------------------------------------------------------------------------- #
+# A
+
+load(here("data/pheno.Rdata"))
+dat <- droplevels(pheno[pheno$Experiment=='exp5',])
+ind <- match(unique(dat$Mouse.ID), dat$Mouse.ID)
+dat <- dat[ind,]
+
+dat$Treatment <- case_match(
+  dat$Treatment,
+  "MPA/DMBA+ KD- MIF+" ~ "P/D+ K- M+",
+  "MPA/DMBA+ KD- MIF-" ~ "P/D+ K- M-",
+  "MPA/DMBA+ KD+ MIF+" ~ "P/D+ K+ M+",
+  "MPA/DMBA+ KD+ MIF-" ~ "P/D+ K+ M-"
+)
+
+  dat$Treatment  <- case_match(
+    dat$Treatment ,
+    "P/D+ K+ M+" ~ "KD+ MIF+",
+    "P/D+ K- M+" ~ "KD- MIF+",
+    "P/D+ K+ M-" ~ "KD+ MIF-",
+    "P/D+ K- M-" ~ "KD- MIF-"
+  )
+  
+  dat$Treatment <- factor(dat$Treatment, levels = c("KD+ MIF+",
+"KD- MIF+",
+"KD+ MIF-",
+"KD- MIF-"))
+
+fit <- survfit(Surv(time_to_event, event==1) ~ Treatment,
+               data = dat[dat$Treatment%in%c("KD+ MIF+",
+                                             "KD- MIF+",
+                                             "KD+ MIF-",
+                                             "KD- MIF-"),])
+
+# Call: survfit(formula = Surv(time_to_event, event == 1) ~ Treatment, 
+#     data = dat[dat$Treatment %in% c("KD+ MIF+", "KD- MIF+", "KD+ MIF-", 
+#         "KD- MIF-"), ])
+# 
+#                     n events median 0.95LCL 0.95UCL
+# Treatment=KD+ MIF+ 11      3     NA      NA      NA
+# Treatment=KD- MIF+ 11      5     NA      92      NA
+# Treatment=KD+ MIF- 11      9     90      87      NA
+# Treatment=KD- MIF- 12     12     83      77      NA
+
+# Global log-rank test
+lr <- survdiff(Surv(time_to_event, event == 1) ~ Treatment, data = dat)
+pval <- 1 - pchisq(lr$chisq, df = length(lr$n) - 1)
+
+# Call:
+# survdiff(formula = Surv(time_to_event, event == 1) ~ Treatment, 
+#     data = dat)
+# 
+# n=45, 23 observations deleted due to missingness.
+# 
+#                     N Observed Expected (O-E)^2/E (O-E)^2/V
+# Treatment=KD+ MIF+ 11        3     9.99     4.888      8.01
+# Treatment=KD- MIF+ 11        5     8.16     1.226      1.79
+# Treatment=KD+ MIF- 11        9     6.64     0.839      1.15
+# Treatment=KD- MIF- 12       12     4.21    14.408     18.90
+# 
+#  Chisq= 24.2  on 3 degrees of freedom, p= 2e-05 
+
+# Pairwise comparisons
+# pairwise_survdiff(Surv(time_to_event, event == 1) ~ Treatment,
+#                   data = dat,
+#                   p.adjust.method = "BH")
+
+# Pairwise survival
+pw <- pairwise_survdiff(
+  Surv(time_to_event, event == 1) ~ Treatment,
+  data = dat,
+  p.adjust.method = "none"  # or "BH" for FDR control
+)
+
+pw$p.value
+
+# Synergy 1 compare interaction, with main effects model only #-----
+dat$keto <- ifelse(grepl("KD\\+", dat$Treatment), 1, 0)
+dat$mife <- ifelse(grepl("MIF\\+", dat$Treatment), 1, 0)
+
+dat$keto <- factor(dat$keto)
+dat$mife <- factor(dat$mife)
+cox_int <- coxph(Surv(time_to_event, event == 1) ~ keto * mife,
+                 data = dat)
+
+#summary(cox_int)
+# Call:
+# coxph(formula = Surv(time_to_event, event == 1) ~ keto * mife, 
+#     data = dat)
+# 
+#   n= 68, number of events= 29 
+# 
+#                coef exp(coef) se(coef)      z Pr(>|z|)  
+# keto1        1.0962    2.9928   0.4436  2.471   0.0135 *
+# mife1        0.3092    1.3623   0.5325  0.581   0.5615  
+# keto1:mife1 -1.8019    0.1650   0.8559 -2.105   0.0353 *
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+#             exp(coef) exp(-coef) lower .95 upper .95
+# keto1           2.993     0.3341   1.25455     7.139
+# mife1           1.362     0.7340   0.47974     3.869
+# keto1:mife1     0.165     6.0614   0.03082     0.883
+# 
+# Concordance= 0.619  (se = 0.045 )
+# Likelihood ratio test= 7.27  on 3 df,   p=0.06
+# Wald test            = 8.04  on 3 df,   p=0.05
+# Score (logrank) test = 8.95  on 3 df,   p=0.03
+
+
+cox_main <- coxph(Surv(time_to_event, event == 1) ~ keto + mife,
+                  data = dat)
+
+#anova(cox_main, cox_int, test = "LRT")
+# Analysis of Deviance Table
+#  Cox model: response is  Surv(time_to_event, event == 1)
+#  Model 1: ~ keto + mife
+#  Model 2: ~ keto * mife
+#    loglik  Chisq Df Pr(>|Chi|)  
+# 1 -113.79                       
+# 2 -111.53 4.5216  1    0.03347 *
+
+# Synergy 2 interaction package #-----
+cox_int <- coxph(Surv(time_to_event, event == 1) ~ keto * mife, data = dat)
+
+# compute additive interaction
+res <- interactionR(cox_int, exposure_names = c("keto", "mife"))
+#                         Measures  Estimates       CI.ll     CI.ul       p
+# 1                           OR00  1.0000000          NA        NA      NA
+# 2                           OR01  1.3623124  0.47974112 3.8685346 0.56150
+# 3                           OR10  2.9927729  1.25455325 7.1393458 0.01347
+# 4                           OR11  0.6726374  0.18973997 2.3845319 0.55033
+# 5 OR(mife1 on outcome [keto1==0]  1.3623124  0.47974112 3.8685346 0.56150
+# 6 OR(mife1 on outcome [keto1==1]  0.2247539  0.06051206 0.8347810 0.02556
+# 7           Multiplicative scale  0.1649797  0.03082398 0.8830235 0.03526
+# 8                           RERI -2.6824479 -5.88755504 0.5226592 0.94953
+
+
+p1 <- ggsurv(fit) +
+  theme_classic() +
+  coord_cartesian(xlim=c(60,100),
+                  ylim=c(0,1)) +
+scale_colour_manual(values=c('#009392','#9ccb86','#eeb479','#cf597e')) +
+  xlab('Time (days)') +
+  theme(legend.title = element_blank(),
+        legend.position = 'right')
+
+legend <- get_legend(p1) %>% 
+  plot_grid() +
+  theme(
+    legend.box.margin = margin(l = -25, unit = "pt")
+  )
+p1 <- p1 + theme(legend.position = "none")
+# ---------------------------------------------------------------------------- #
+# B
+
+load("~/Dropbox/eca/mouse-project/2-uibk/2-analysis/5-output/wgt.Rdata")
+load("~/Dropbox/eca/mouse-project/2-uibk/2-analysis/5-output/bhb.Rdata")
+
+wgt <- wgt[!is.na(wgt$Experiment),]
+bhb <- bhb[!is.na(bhb$Experiment),]
+
+wgt$Treatment <- factor(wgt$Treatment)
+wgt$Treatment <- factor(wgt$Treatment, levels=rev(levels(wgt$Treatment)))
+
+bhb$Treatment <- factor(bhb$Treatment)
+bhb$Treatment <- factor(bhb$Treatment, levels=rev(levels(bhb$Treatment)))
+bhb$glucose <- as.numeric(bhb$glucose)
+bhb$bhb <- as.numeric(bhb$bhb)
+
+bhb$Treatment <- case_match(
+  bhb$Treatment,
+  "MPA/DMBA+ KD- MIF+" ~ "KD-",
+  "MPA/DMBA+ KD- MIF-" ~ "KD-",
+  "MPA/DMBA- KD- MIF+" ~ "KD-",
+  "MPA/DMBA- KD- MIF-" ~ "KD-",
+  "MPA/DMBA+ KD+ MIF+" ~ "KD+",
+  "MPA/DMBA+ KD+ MIF-" ~ "KD+",
+  "MPA/DMBA- KD+ MIF-" ~ "KD+",
+  "MPA/DMBA- KD+ MIF+" ~ "KD+"
+)
+
+p2 <- ggplot(bhb, aes(x=age,y=bhb,colour=Treatment)) +
+  geom_point(size = 0.8, alpha = 0.5) +
+  stat_smooth(size=0.75, se = TRUE, fill = "grey80") +
+  scale_colour_manual(values= c('#d29c3b', '#5ba2a1')) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.7,0.8)) +
+  xlab('Age (days)') +
+  ylab('Beta-hydroxybutyrate (mmol/L)') +
+  guides(colour = guide_legend(reverse=F))
+
+p3 <- ggplot(bhb, aes(x=age,y=glucose,colour=Treatment)) +
+  geom_point(size = 0.8, alpha = 0.5) +
+  stat_smooth(size=0.75, se = TRUE, fill = "grey80") +
+  scale_colour_manual(values= c('#d29c3b', '#5ba2a1')) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  xlab('Age (days)') +
+  ylab('Glucose (mg/dL)') +
+  guides(colour = guide_legend(reverse=F))
+
+wgt$Treatment <- case_match(
+  wgt$Treatment,
+  "MPA/DMBA+ KD- MIF+" ~ "KD-",
+  "MPA/DMBA+ KD- MIF-" ~ "KD-",
+  "MPA/DMBA- KD- MIF+" ~ "KD-",
+  "MPA/DMBA- KD- MIF-" ~ "KD-",
+  "MPA/DMBA+ KD+ MIF+" ~ "KD+",
+  "MPA/DMBA+ KD+ MIF-" ~ "KD+",
+  "MPA/DMBA- KD+ MIF-" ~ "KD+",
+  "MPA/DMBA- KD+ MIF+" ~ "KD+"
+)
+
+wgt <- wgt %>% dplyr::filter(age <= max(bhb$age))
+
+p4 <- ggplot(wgt, aes(x=age,y=body_weight,colour=Treatment)) +
+  geom_point(size = 0.8, alpha = 0.25) +
+  stat_smooth(size=0.75, se = TRUE, fill = "grey80") +
+  scale_colour_manual(values= c('#d29c3b', '#5ba2a1')) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  xlab('Age (days)') +
+  ylab('Body weight (g)') +
+  guides(colour = guide_legend(reverse=F))
+
+des <- c("AB#
+          CDE")
+
+
+p <- p1 + legend + p2 + p3 + p4 +
+  plot_layout(design = des) +
+  plot_annotation(tag_levels = list(c("a", "", "b", "c", "d")))
+
+# Figure 1 was remade utilizing graphpad
+
+```
+

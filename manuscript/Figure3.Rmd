@@ -1,0 +1,398 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(grid)
+library(gridExtra)
+library(ggpubr)
+library(here)
+library(ggrepel)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(reshape2)
+library(viridisLite)
+library(patchwork)
+
+col_fill <- c("#d73027","#4575b4" )
+names(col_fill) <- c("HyperM", "HypoM")
+cell_colors <- c("Ctrl" = "gray40",
+                                "MIF" = "blue",
+                                "KD" = "red",
+                                "KD + MIF" = "purple")
+
+source(here("src/clr_ilr_transform.R"))
+
+```
+
+```{r}
+
+# Modification plots island DMRs #-----
+# Total effect (no celltype composition correction)
+pdat <- readRDS(here("results/analysis1/1-output/breast_limma_sig.Rds")) %>%
+  mutate(cell = paste(keto, mifepristone, sep = " | ")) %>%
+  mutate(cell = case_when(
+    cell == "KD- | MIF-" ~ "Ctrl",
+    cell == "KD- | MIF+" ~ "MIF",
+    cell == "KD+ | MIF-" ~ "KD",
+    cell == "KD+ | MIF+" ~ "KD + MIF"
+  ))
+
+pdat$cell <- factor(pdat$cell, levels = c("Ctrl", "KD", "MIF", "KD + MIF"))
+pdat$outcome <- gsub("_logit","",pdat$outcome)
+
+anno <- readRDS(here("results/0-output/anno_12.v1.mm10.Rds"))
+n_diff <- length(unique(pdat$outcome))
+pdat <- pdat %>%
+  dplyr::mutate(
+    direction = ifelse(estimate > 0, "hyper", "hypo")
+  ) 
+
+hyper <- pdat %>% dplyr::filter(direction == "hyper") %>% pull(outcome)
+hypo <- pdat %>% dplyr::filter(direction == "hypo") %>% pull(outcome)
+
+# Density plot with separate lines
+p1 <- ggplot(pdat, aes(x = estimate, color = cell, fill = cell)) +
+  geom_density(alpha = 0.3) +           # semi-transparent fill
+  theme_classic() +
+  xlab("ΔExposure (M value)") +
+  ylab("Density of estimates") +
+  scale_color_manual(values = c("Ctrl" = "#AF1B3F",
+                                "MIF" = "#0072B2",
+                                "KD" = "#E69F00",
+                                "KD + MIF" = "#009E73")) +
+  scale_fill_manual(values = c("Ctrl" = "#F0849F",
+                               "MIF" = "#66AAEC",
+                               "KD" = "#F7D281",
+                               "KD + MIF" = "#8EECBA")) +
+  theme(legend.title = element_blank()) +
+  theme(legend.position = "bottom") +
+  ggtitle("DMCGIs in Ctrl group")
+p_leg <- ggpubr::get_legend(p1) %>% ggpubr::as_ggplot()
+p1 <- p1 + theme(legend.position = "none")
+
+# Summary bayes with classification: enhancing effect, antagonizing effect, no effect
+pdat <- readRDS(here("results/analysis1/1-output/breast_posterior_sig.Rds")) %>%
+  as.data.frame() 
+pdat$outcome <- gsub("_logit","",pdat$outcome)
+pdat <- pdat %>%
+  dplyr::mutate(effect = case_when(
+    prob_attenuate > 0.7 ~ "Antagonizing",
+    prob_strengthen > 0.7 ~ "Enhancing",
+    TRUE ~ "No effect"
+  )) %>%
+  dplyr::mutate(direction = case_when(outcome %in% hyper ~ "HyperM",
+                                      outcome %in% hypo ~ "HypoM")) %>%
+  dplyr::count(effect, modifier, direction)
+pdat$modifier <- factor(gsub("KD_MIF","KD + MIF",pdat$modifier), levels = c("KD","MIF", "KD + MIF"))
+
+p2 <- ggplot(pdat, aes(
+  x = effect,
+  y = n,
+  color = modifier,
+  fill = modifier
+)) +
+  geom_col(width = 0.8, position = position_dodge(width = 0.8)) +
+  scale_y_continuous(breaks = c(0, 1000, 2000)) +
+  coord_flip() +
+  theme_classic() +
+  
+  labs(x = NULL, y = "CGI count") +
+  scale_color_manual(values = c(
+    "MIF" = "#0072B2",
+    "KD" = "#E69F00",
+    "KD + MIF" = "#009E73"
+  ))+
+  scale_fill_manual(values = c(
+    "MIF" = "#66AAEC",
+    "KD" = "#F7D281",
+    "KD + MIF" = "#8EECBA"
+  ))+
+  theme(legend.position = "none") +
+  facet_wrap( ~ direction)
+```
+
+
+```{r}
+
+# Volcano plots #-----
+# After correction
+# Load in cpg-level summaries
+
+dat <- readRDS(here("results/analysis2_celltype_adj/2-output/breast_limma_celltype_adj.Rds")) %>%
+  mutate(cell = paste(keto, mifepristone, sep = " | ")) %>%
+  mutate(cell = case_when(
+    cell == "KD- | MIF-" ~ "Ctrl",
+    cell == "KD- | MIF+" ~ "MIF",
+    cell == "KD+ | MIF-" ~ "KD",
+    cell == "KD+ | MIF+" ~ "KD + MIF"
+  ))
+
+dat$cell <- factor(dat$cell, levels = c("Ctrl", "KD", "MIF", "KD + MIF"))
+dat$outcome <- gsub("_logit","",dat$outcome)
+anno <- readRDS(here("results/0-output/anno_12.v1.mm10.Rds"))
+dat <- left_join(dat,anno, by = c("outcome" = "Name"))
+
+pdat <- dat %>% dplyr::filter(cell == "Ctrl")
+
+pdat <- pdat %>%
+  dplyr::mutate(fill = case_when(
+    p.adj_cell > 0.05 ~ "No DMR",
+    estimate > 0 & p.adj_cell <= 0.05 ~ "HyperM",
+    estimate < 0 & p.adj_cell <= 0.05 ~ "HypoM"
+  )) %>% dplyr::filter(!is.na(estimate))
+ 
+# Mark CpGs with abs db > 0.2
+top_cpgs1 <- pdat %>%
+  filter(promoter == TRUE & fill == "HyperM" & p.adj_cell < 0.05 & abs(delta_beta) > 0.2)
+top_cpgs2 <- pdat %>%
+  filter(promoter == TRUE & fill == "HypoM" & p.adj_cell < 0.05 & abs(delta_beta) > 0.2)
+
+p3 <- pdat %>%
+  dplyr::filter(promoter == TRUE) %>%
+  ggplot(aes(x = estimate, y = -log(p.value), color = fill)) +
+  scale_color_manual(values = col_fill) +
+  geom_point(alpha = 0.5) +
+  geom_text_repel(
+    data = bind_rows(top_cpgs1,top_cpgs2),
+    aes(label = gene_primary),
+    size = 3,
+    color = "black",           # label text color
+    max.overlaps = Inf,
+    segment.color = "grey50",  # connector line color
+    segment.size = 0.3,        # connector line thickness
+    segment.alpha = 0.8,       # slightly transparent line
+    nudge_y = 5, 
+    nudge_x = 0.2,
+    box.padding = 0.2,         # space around text
+    point.padding = 0.2,       # distance from point
+    min.segment.length = 0
+  ) +
+  theme_classic() +
+  xlab("Adj. Ctrl ΔExposure (M value)") +
+  ylab("-Log(P value)") +
+  theme(legend.position = "none") +
+  ggtitle("Promoter-associated CGIs (pCGIs)")
+
+# Mark CpGs with abs db > 0.2
+top_cpgs1 <- pdat %>%
+  filter(promoter == FALSE & fill == "HyperM" & p.adj_cell < 0.05 & abs(delta_beta) > 0.2)
+top_cpgs2 <- pdat %>%
+  filter(promoter == FALSE & fill == "HypoM" & p.adj_cell < 0.05 & abs(delta_beta) > 0.2)
+
+p4 <- pdat %>%
+  dplyr::filter(promoter == FALSE) %>%
+ na.omit()%>%
+  ggplot(aes(x = estimate, y = -log(p.value), color = fill)) +
+  scale_color_manual(values = col_fill) +
+  geom_point(alpha = 0.5) +
+  geom_text_repel(
+    data = bind_rows(top_cpgs1,top_cpgs2),
+    aes(label = gene_primary),
+    size = 3,
+    color = "black",           # label text color
+    max.overlaps = Inf,
+    segment.color = "grey50",  # connector line color
+    segment.size = 0.3,        # connector line thickness
+    segment.alpha = 0.8,       # slightly transparent line
+    nudge_y = 5, 
+    nudge_x = 0.2,
+    box.padding = 0.2,         # space around text
+    point.padding = 0.2,       # distance from point
+    min.segment.length = 0
+  ) +
+  theme_classic() +
+  xlab("Adj. Ctrl ΔExposure (M value)") +
+  ylab("-Log(P value)") +
+  theme(legend.position = "none") +
+  ggtitle("Orphan CGIs (oCGIs)") 
+
+```
+
+```{r}
+
+col_circle <- c("grey", "#d73027","#4575b4" )
+names(col_circle) <- c("No DMCGI ΔExposure Ctrl", "HyperM DMCGI ΔExposure Ctrl", "HypoM DMCGI ΔExposure Ctrl")
+col_fill <- c(NA, "grey", "#d73027","#4575b4")
+
+
+helper_volcano_plot <- function(dat, hyperM, hypoM, cell_val, cell_val2 = "Ctrl", prom_val, plot_tit) {
+
+  names(col_fill) <- c("No fill", paste0("DMCGI (", cell_val, " - Ctrl)"), "HyperM DMCGI ΔExposure Ctrl", "HypoM DMCGI ΔExposure Ctrl")
+  
+  pdat <- dat %>% dplyr::filter(cell == cell_val) %>%
+    dplyr::mutate(
+      color = case_when(
+        !outcome %in% c(hyperM, hypoM) ~ "No DMCGI ΔExposure Ctrl",
+        outcome %in% hyperM ~ "HyperM DMCGI ΔExposure Ctrl",
+        outcome %in% hypoM ~ "HypoM DMCGI ΔExposure Ctrl"
+      ),
+      fill = case_when(
+        p.adj_cell > 0.05 ~ "No fill",
+        p.adj_cell <= 0.05 &
+          !outcome %in% c(hyperM, hypoM) ~ paste0("DMCGI (", cell_val, " - Ctrl)"),
+        p.adj_cell <= 0.05 &
+          outcome %in% hyperM ~ "HyperM DMCGI ΔExposure Ctrl",
+        p.adj_cell <= 0.05 &
+          outcome %in% hypoM ~ "HypoM DMCGI ΔExposure Ctrl"
+      )
+    ) %>%
+    dplyr::filter(!is.na(estimate))
+  
+  # Highlight those with p.value < 0.05 and db > 0.2
+  top.values1 <- pdat %>%
+    filter(promoter == prom_val & estimate > 0 & p.value < 0.05 & abs(delta_beta) > 0.1) %>%
+    arrange(desc(abs(delta_beta))) %>%
+    head(n=10)
+  top.values2 <- pdat %>%
+    filter(promoter == prom_val & estimate < 0 & p.value < 0.05 & abs(delta_beta) > 0.1) %>%
+    arrange(desc(abs(delta_beta))) %>%
+    head(n=10)
+  
+  p <- pdat %>%
+    dplyr::filter(promoter == prom_val) %>%
+    ggplot(aes(
+      x = estimate,
+      y = -log(p.value),
+      color = color,
+      fill = fill
+    )) +
+    scale_color_manual(values = col_circle) +
+    scale_fill_manual(values = col_fill) +
+    geom_point(
+      alpha = 0.5,
+      shape = 21,
+      show.legend = c(color = TRUE, fill = FALSE)
+    ) +
+    geom_text_repel(
+      data = bind_rows(top.values1, top.values2),
+      aes(label = gene_primary),
+      size = 3,
+      color = "black",
+      max.overlaps = Inf,
+      segment.color = "grey50",
+      segment.size = 0.3,
+      segment.alpha = 0.8,
+      nudge_y = 2,
+      nudge_x = 0.2,
+      box.padding = 0.2,
+      point.padding = 0.2,
+      min.segment.length = 0
+    ) +
+    scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1, 0, 1, 2)) +
+    labs(color = "") +
+    theme_classic() +
+    xlab(paste0("Adj. ΔM (", cell_val, " − ", cell_val2, ")")) +
+    ylab("-Log(P value)") +
+    ggtitle(plot_tit)
+  
+  return(p)
+  
+}
+
+# Load in Cpg-level summaries 
+dat <- readRDS(here("results/analysis2_celltype_adj/7-output/breast_limma_simple.Rds")) %>%
+  dplyr::mutate(cell = case_when(group == "KD+ MIF-" ~ "KD",
+                                 group == "KD- MIF+" ~ "MIF",
+                                 group == "KD+ MIF+" ~ "KD + MIF"))
+dat$cell <- factor(dat$cell, levels = c("KD", "MIF", "KD + MIF"))
+dat$outcome <- gsub("_logit","",dat$outcome)
+anno <- readRDS(here("results/0-output/anno_12.v1.mm10.Rds"))
+dat <- left_join(dat,anno, by = c("outcome" = "Name"))
+
+dat2 <- readRDS(here("results/analysis2_celltype_adj/7-output/breast_limma_simple2.Rds")) %>%
+  dplyr::mutate(cell = case_when(group == "KD+ MIF-" ~ "KD",
+                                 group == "KD- MIF+" ~ "MIF",
+                                 group == "KD+ MIF+" ~ "KD + MIF"))
+dat2$cell <- factor(dat2$cell, levels = c("KD", "MIF", "KD + MIF"))
+dat2$outcome <- gsub("_logit","",dat2$outcome)
+dat2 <- left_join(dat2,anno, by = c("outcome" = "Name"))
+
+# Baseline DMPs
+dat3 <- readRDS(here("results/analysis2_celltype_adj/2-output/breast_limma_sig_celltype_adj.Rds")) %>%
+  mutate(cell = paste(keto, mifepristone, sep = " ")) %>%
+  dplyr::filter(cell == "KD- MIF-")
+dat3$outcome <- gsub("_logit","",dat3$outcome)
+hyperM <- dat3 %>% dplyr::filter(estimate > 0 & p.adj_cell <= 0.05) %>% pull(outcome)
+hypoM <- dat3 %>% dplyr::filter(estimate < 0 & p.adj_cell <= 0.05) %>% pull(outcome)
+
+# Volcano plots 
+
+p5 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "KD", prom_val = TRUE, plot_tit = "pCGIs") + ylim(0,16)
+p9 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "KD", prom_val = FALSE, plot_tit = "oCGIs") + ylim(0,25)
+p6 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "MIF", prom_val = TRUE, plot_tit = " ") + ylim(0,16)
+p10 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "MIF", prom_val = FALSE, plot_tit = " ") + ylim(0,25)
+p7 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "KD + MIF", prom_val = TRUE, plot_tit = " ") + ylim(0,16)
+p11 <- helper_volcano_plot(dat, hyperM, hypoM,cell_val = "KD + MIF", prom_val = FALSE, plot_tit = " ") + ylim(0,25)
+# p8 <- helper_volcano_plot(dat2, hyperM, hypoM,cell_val = "KD + MIF", cell_val2 = "MIF", prom_val = TRUE, plot_tit = "pCGIs")
+# p12 <- helper_volcano_plot(dat2, hyperM, hypoM,cell_val = "KD + MIF", cell_val2 = "MIF", prom_val = FALSE, plot_tit = "oCGIs")
+
+p_comb <- (p5 + p6 + p7)/(p9 + p10 + p11) + plot_layout(guides = "collect")
+p_comb_grob <- ggplotify::as.grob(p_comb) 
+# p_comb1 <- (p5 + p6 + p7) + plot_layout(guides = "collect")
+# p_comb2 <- (p9 + p10 + p11) + plot_layout(guides = "collect")
+# p_comb1_grob <- ggplotify::as.grob(p_comb1) 
+# p_comb2_grob <- ggplotify::as.grob(p_comb2) 
+
+```
+
+
+```{r, fig.height = 16, fig.width = 12}
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p1, top = textGrob(
+      "a Exposure effect",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p2, top = textGrob(
+      "b",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    p_leg,
+    arrangeGrob(p3, top = textGrob(
+      "c Cell type-adjusted exposure effect",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p4, top = textGrob(
+      "d",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p_comb_grob, top = textGrob(
+      "e Cell type-adjusted treatment effect",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    ))
+  ),
+  layout_matrix = rbind(c(1,1,2,2),
+                        c(3,3,3,3),
+                        c(4,4,5,5),
+                        c(NA,NA,NA,NA),
+                        c(6,6,6,6)),
+  heights = c(3.5,0.5, 4,0.5,6.5)
+))
+
+
+```
+
+

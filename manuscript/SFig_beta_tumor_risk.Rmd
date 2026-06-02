@@ -1,0 +1,349 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(grid)
+library(gridExtra)
+library(ggpubr)
+library(here)
+library(ggrepel)
+library(reshape2)
+library(viridisLite)
+library(rstatix)
+
+col_fill <- c("#d73027","#4575b4" )
+names(col_fill) <- c("HyperM", "HypoM")
+
+source(here("src/clr_ilr_transform.R"))
+
+make_density_plot <- function(pdat, dmp_subset, title, x_lab, y_lab) {
+   
+  ggplot(pdat %>% filter(CpG %in% dmp_subset),
+         aes(x = Mammary, y = `Mammary tumor`)) +
+    geom_point(size = 0.5, color = viridis::viridis(1)) +
+    stat_density_2d_filled(breaks = breaks) +
+    scale_fill_manual(
+      values = c("NA", viridis(nlev - 1)),
+      # white for lowest bin
+      drop = FALSE,
+      labels = function(x)
+        ifelse(x %in% pretty_labels, round(x, 3), "")
+    ) +
+    guides(fill = guide_coloursteps(even.steps = FALSE, # smoother appearance
+                                    show.limits = TRUE)) +
+    geom_smooth(method = "lm",
+                se = FALSE,
+                color = "red") +
+    stat_cor(
+      method = "pearson",
+      label.x.npc = 0.15,
+      label.y.npc = 0.9,
+      color = "red"
+    ) +
+    labs(fill = "CpG count") +
+    xlab(x_lab) +
+    ylab(y_lab) +
+    theme(legend.position = "bottom") +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +  # keep full data, axis fixed
+    theme_classic() +
+    theme(legend.position = "bottom") +
+    ggtitle(title)
+}
+
+```
+
+```{r}
+
+# Check cell type changes in control group exposed, mammary tissue versus tumor
+# Breast cancer only
+load(here("data/pheno.Rdata"))
+dat <- droplevels(pheno[pheno$Experiment=='exp5' &
+                          pheno$Tissue.type %in% c('Breast', 'Breast tumor'),])
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- dat %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) 
+
+# Combine fat and fibroblasts, set outcomes
+dat$EpiFibFatIc_Stromal <- dat$EpiFibFatIc_Fat + dat$EpiFibFatIc_Fib
+dat <- dat[, !colnames(dat) %in% c("EpiFibFatIc_Fat", "EpiFibFatIc_Fib")]
+
+outcome_cols <- colnames(dat)[grepl("EpiFibFatIc",colnames(dat))]
+outcome_cols1 <- c("EpiFibFatIc_Epi","EpiFibFatIc_IC","EpiFibFatIc_Stromal")
+outcome_cols2 <- setdiff(outcome_cols, outcome_cols1[1:2])
+
+# Broader level
+clr_df <- clr_transform(dat,outcome_cols1, c("Mouse.ID","exposure","keto","mifepristone","Tissue.type"))
+labels <- c(
+    "EpiFibFatIc_Epi" = 'Epithelial cells',
+    "EpiFibFatIc_IC" = 'Immune cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+clr_df <- clr_df %>%
+  dplyr::filter(exposure == "P/D+" & keto == "KD-" & mifepristone == "MIF-") %>%
+  pivot_longer(
+    cols = starts_with("EpiFibFatIc"),
+    names_to = "CellType",
+    values_to = "clr_value"
+  )
+
+stat.test <- clr_df %>%
+  group_by(CellType) %>%
+  wilcox_test(clr_value ~ Tissue.type, paired = TRUE) %>%
+  add_xy_position(x = "Tissue.type")
+
+p0 <- ggplot(clr_df, aes(x = Tissue.type, y = clr_value, group = Mouse.ID, color = Mouse.ID)) +
+  geom_line(alpha = 0.4) +
+  geom_point(size = 2) +
+  facet_wrap(~ CellType, scales = "free_y",
+             labeller = labeller(CellType = labels)) +
+  stat_pvalue_manual(stat.test, label = "p") +
+  xlab("") +
+  ylab("Relative abundance (CLR)") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+
+# # hepidish
+# clr_df <- clr_transform(dat,outcome_cols2, c("Mouse.ID","exposure","keto","mifepristone","Tissue.type"))
+# labels <- c(
+#     "EpiFibFatIc_basal" = 'Basal cells',
+#     "EpiFibFatIc_luminal_progenitor"= 'Luminal progenitor cells',
+#     "EpiFibFatIc_mature_luminal"= 'Mature luminal cells',
+#     "EpiFibFatIc_B" = 'B cells',
+#     "EpiFibFatIc_CD4T" = 'CD4 T cells',
+#     "EpiFibFatIc_CD8T" = 'CD8 T cells',
+#     "EpiFibFatIc_MDSC" = 'MDSCs',
+#     "EpiFibFatIc_Neutro" = 'Neutrophiles',
+#     "EpiFibFatIc_NK" = 'NK cells',
+#     "EpiFibFatIc_Stromal" = 'Stroma'
+#   )
+# 
+# clr_df <- clr_df %>%
+#   dplyr::filter(exposure == "P/D+" & keto == "KD-" & mifepristone == "MIF-")
+# 
+# clr_df <- clr_df %>%
+#   dplyr::filter(exposure == "P/D+" & keto == "KD-" & mifepristone == "MIF-") %>%
+#   pivot_longer(
+#     cols = starts_with("EpiFibFatIc"),
+#     names_to = "CellType",
+#     values_to = "clr_value"
+#   )
+# 
+# stat.test <- clr_df %>%
+#   group_by(CellType) %>%
+#   wilcox_test(clr_value ~ Tissue.type, paired = TRUE) %>%
+#   add_xy_position(x = "Tissue.type")
+# 
+# p2 <- ggplot(clr_df, aes(x = Tissue.type, y = clr_value, group = Mouse.ID, color = Mouse.ID)) +
+#   geom_line(alpha = 0.4) +
+#   geom_point(size = 2) +
+#   facet_wrap(~ CellType, scales = "free_y",
+#              labeller = labeller(CellType = labels)) +
+#   stat_pvalue_manual(stat.test, label = "p") +
+#   xlab("") +
+#   theme_classic() +
+#   theme(legend.position = "none")
+
+```
+
+
+```{r}
+
+#  Load in cpg-level summaries #-----
+dat <- readRDS(here("results/analysis2_celltype_adj/2-output/breast_limma_celltype_adj.Rds")) %>%
+  mutate(cell = paste(keto, mifepristone, sep = " | ")) %>%
+  mutate(cell = case_when(
+    cell == "KD- | MIF-" ~ "Baseline (no modifier)",
+    cell == "KD- | MIF+" ~ "MIF",
+    cell == "KD+ | MIF-" ~ "KD",
+    cell == "KD+ | MIF+" ~ "KD + MIF"
+  ))
+
+dat$cell <- factor(dat$cell, levels = c("Baseline (no modifier)", "KD", "MIF", "KD + MIF"))
+dat$outcome <- gsub("_logit","",dat$outcome)
+anno <- readRDS(here("results/0-output/anno_12.v1.mm10.Rds"))
+dat <- left_join(dat,anno, by = c("outcome" = "Name"))
+
+dmp_anal <- dat %>% dplyr::filter(cell == "Baseline (no modifier)")
+
+dmp_anal <- dmp_anal %>%
+  dplyr::mutate(fill = case_when(
+    p.adj_cell > 0.05 ~ "No DMR",
+    estimate > 0 & p.adj_cell <= 0.05 ~ "HyperM",
+    estimate < 0 & p.adj_cell <= 0.05 ~ "HypoM"
+  )) %>% dplyr::filter(!is.na(estimate))
+
+# Tumor vs adjacent pairs unadjusted #----
+
+pdat <- readRDS(here("results/analysis4_celltype_adj_tumor/1-output/M_12pairs.Rds")) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "CpG") %>%
+  pivot_longer(cols = -CpG, names_to = "basename", values_to = "Madj") %>%
+  dplyr::left_join(readRDS(here("results/analysis4_celltype_adj_tumor/1-output/pheno_12pairs.Rds"))) %>%
+  dplyr::select(CpG, Tissue.type, Madj, Mouse.ID) %>%
+  pivot_wider(
+    names_from = Tissue.type,
+    values_from = Madj
+  ) %>%
+  dplyr::left_join(anno, by = c("CpG" = "Name")) %>%
+  dplyr::rename('Mammary' =  'Breast', `Mammary tumor` = `Breast tumor`)
+
+breaks <- seq(0, 70, by = 5)
+nlev <- length(breaks) - 1
+pretty_labels <- pretty(range(breaks), n = 5)
+x_lab <- "Mammary tissue at risk - Beta"
+y_lab <- "Mammary tumor - Beta"
+
+# HyperM promoter DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == TRUE & fill == "HyperM") %>% pull(outcome)
+#dmp <- paste0(dmp,"_logit")
+p1 <- make_density_plot(pdat, dmp,"HyperM, pCGI", x_lab, y_lab)
+p_leg1 <- ggpubr::get_legend(p1) %>% ggpubr::as_ggplot()
+p1 <- p1 + theme(legend.position = "none")
+
+# HypoM promoter DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == TRUE & fill == "HypoM") %>% pull(outcome)
+p2 <- make_density_plot(pdat, dmp, "HypoM, pCGI", x_lab, y_lab) + theme(legend.position = "none")
+
+# HyperM Gene body DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == F & fill == "HyperM") %>% pull(outcome)
+p3 <- make_density_plot(pdat, dmp,"HyperM, oCGI", x_lab, y_lab) + theme(legend.position = "none")
+
+# HyperM Gene body DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == F & fill == "HypoM") %>% pull(outcome)
+p4 <- make_density_plot(pdat, dmp,"HypoM, oCGI", x_lab, y_lab) + theme(legend.position = "none")
+ 
+
+# Tumor vs adjacent pairs adjusted #----
+pdat <- readRDS(here("results/analysis4_celltype_adj_tumor/1-output/Madj_12pairs.Rds")) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "CpG") %>%
+  pivot_longer(cols = -CpG, names_to = "basename", values_to = "Madj") %>%
+  dplyr::left_join(readRDS(here("results/analysis4_celltype_adj_tumor/1-output/pheno_12pairs.Rds"))) %>%
+  dplyr::select(CpG, Tissue.type, Madj, Mouse.ID) %>%
+  pivot_wider(
+    names_from = Tissue.type,
+    values_from = Madj
+  ) %>%
+  dplyr::left_join(anno, by = c("CpG" = "Name")) %>%
+  dplyr::rename('Mammary' =  'Breast', `Mammary tumor` = `Breast tumor`)
+
+breaks <- seq(0, 70, by = 5)
+nlev <- length(breaks) - 1
+pretty_labels <- pretty(range(breaks), n = 5)
+x_lab <- "Mammary tissue at risk - adj. Beta"
+y_lab <- "Mammary tumor - adj. Beta"
+
+# HyperM promoter DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == TRUE & fill == "HyperM") %>% pull(outcome)
+#dmp <- paste0(dmp,"_logit")
+p5 <- make_density_plot(pdat, dmp,"HyperM, pCGI", x_lab, y_lab)
+p_leg2 <- ggpubr::get_legend(p5) %>% ggpubr::as_ggplot()
+p5 <- p5 + theme(legend.position = "none")
+
+# HypoM promoter DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == TRUE & fill == "HypoM") %>% pull(outcome)
+p6 <- make_density_plot(pdat, dmp, "HypoM, pCGI", x_lab, y_lab) + theme(legend.position = "none")
+
+# HyperM Gene body DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == F & fill == "HyperM") %>% pull(outcome)
+p7 <- make_density_plot(pdat, dmp,"HyperM, oCGI", x_lab, y_lab) + theme(legend.position = "none")
+
+# HyperM Gene body DMPs
+dmp <- dmp_anal %>% dplyr::filter(promoter == F & fill == "HypoM") %>% pull(outcome)
+p8 <- make_density_plot(pdat, dmp,"HypoM, oCGI", x_lab, y_lab) + theme(legend.position = "none")
+
+```
+
+```{r, fig.height=14, fig.width=12}
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p0, top = textGrob(
+      "a",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p1, top = textGrob(
+      "b",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p2, top = textGrob(
+      "c",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p3, top = textGrob(
+      "d",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p4, top = textGrob(
+      "e",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    p_leg1,
+    arrangeGrob(p5, top = textGrob(
+      "f",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p6, top = textGrob(
+      "g",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p7, top = textGrob(
+      "h",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p8, top = textGrob(
+      "i",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    p_leg2
+  ),
+  layout_matrix = rbind(c(1,1,1,1),
+                        c(2,3,4,5),
+                        c(6,6,6,6),
+                        c(7,8,9,10),
+                        c(11,11,11,11)),
+  heights = c(4,4,1,4,1)
+))
+
+
+```

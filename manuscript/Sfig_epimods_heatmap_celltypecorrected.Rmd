@@ -1,0 +1,206 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(here)
+library(tidyverse)
+library(patchwork)
+library(igraph)
+library(ggraph)
+library(marray)
+library(grid)
+library(gridExtra)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+
+```
+
+```{r}
+
+source(here("src/helpers_exposure-modifier.R"))
+source(here("src/epimods_functions.R"))
+
+parse_means <- function(pheno_dat, gene_meth, epimod_genes){
+  dat <-gene_meth %>%
+    dplyr::filter(gene_primary %in% epimod_genes)  %>%# filter out epimod genes
+    column_to_rownames(var = "gene_primary") %>%
+    dplyr::select(-n_cpg) %>%
+    t() %>%
+    as.data.frame() %>%
+    rownames_to_column(var = "basename") 
+  dat <- dplyr::left_join(pheno_dat, dat, by = "basename")
+  return(dat)
+}
+
+# Pheno #----
+load(here("data/pheno.Rdata"))
+# Issue with PC doubled columns
+
+pheno_sub <- droplevels(pheno[pheno$Experiment=='exp5' & pheno$Tissue.type %in% c('Breast'),])
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- pheno_sub %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  ) %>%
+  dplyr::select(basename,exposure,keto,mifepristone,diet4)
+
+pc_scores <- readRDS(here("results/analysis2_celltype_adj/2-output/celltype_pc_scores.Rds"))
+dat <- full_join(dat, pc_scores[,1:5])
+covars <- colnames(pc_scores[,1:5])[-1]
+
+# Epimod info #----
+load(here("results/analysis2_celltype_adj/12-output/epimods_promoter.Rdata"))
+out_epimod_prom <- out
+load(here("results/analysis2_celltype_adj/12-output/epimods_genebody.Rdata"))
+out_epimod_body <- out
+rm(out);invisible(gc())
+ 
+annot <- readRDS(here("results/0-output/anno2_genes_filtered.Rds"))
+
+id2symbol <- setNames(
+  annot$gene_primary,
+  annot$ENTREZID
+)
+
+# gene summaries bulk #-----
+
+gene_meth_prom <- readRDS(here("results/analysis2_celltype_adj/6-output/island_breast_genemeanmeth_promoters.Rds"))
+gene_meth_body <- readRDS(here("results/analysis2_celltype_adj/6-output/island_breast_genemeanmeth_genebody.Rds"))
+
+# gene summaries cell type compartments #-----
+
+gene_met_epi_prom <- readRDS(here("results/analysis3_tensor/1-output/base_epi_genemeanmeth_promoters.Rds"))
+gene_met_imm_prom <- readRDS(here("results/analysis3_tensor/1-output/base_imm_genemeanmeth_promoters.Rds"))
+gene_met_stro_prom <- readRDS(here("results/analysis3_tensor/1-output/base_stro_genemeanmeth_promoters.Rds"))
+gene_met_epi_body <- readRDS(here("results/analysis3_tensor/1-output/base_epi_genemeanmeth_genebody.Rds"))
+gene_met_imm_body <- readRDS(here("results/analysis3_tensor/1-output/base_imm_genemeanmeth_genebody.Rds"))
+gene_met_stro_body <- readRDS(here("results/analysis3_tensor/1-output/base_stro_genemeanmeth_genebody.Rds"))
+
+```
+
+
+```{r}
+
+# Promoter #-----------------
+
+sig.mods <- out_epimod_prom[[3]]
+
+# # Example one mod
+# # Tissue-wide maps
+# outcomes <- unname(id2symbol[sig.mods[[1]]])
+# pdat <- parse_means(dat,gene_meth_prom,outcomes)
+# p2 <- wrap_summary_plot(pdat, outcomes)
+# 
+# # Cell compartment map added, pathway means
+# pdat_epi <- parse_means(dat,gene_met_epi_prom, outcomes)
+# pdat_imm <- parse_means(dat,gene_met_imm_prom, outcomes)
+# pdat_stro <- parse_means(dat,gene_met_stro_prom, outcomes)
+# pdat_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+# names(pdat_comp) <- c("Epi","Imm","Mes")
+# p2 <- wrap_summary_plot_comp(pdat, pdat_comp, outcomes)
+
+# Prep Tissue-wide and cell compartment maps
+list_tissue <- list()
+list_comp <- list()
+for (i in 1:length(sig.mods)) {
+  outcomes <- unname(id2symbol[sig.mods[[i]]])
+  
+  list_tissue[[i]] <- parse_means(dat, gene_meth_prom, outcomes)
+  
+  pdat_epi <- parse_means(dat, gene_met_epi_prom, outcomes)
+  pdat_imm <- parse_means(dat, gene_met_imm_prom, outcomes)
+  pdat_stro <- parse_means(dat, gene_met_stro_prom, outcomes)
+  list_comp[[i]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
+}
+
+# Combined plot #--------------
+outcomes <- unname(id2symbol[unique(unlist(sig.mods))])
+outcome_labels <- NULL
+p3 <- wrap_summary_plot_multi3(list_tissue,
+                               list_comp,
+                               unname(id2symbol[names(sig.mods)]),
+                               outcomes,
+                               outcome_labels,
+                               covars = covars,
+                               drop_ns = T, 
+                               min_rows = 3)
+p3_grob <- ggplotify::as.grob(p3) 
+
+# Gene body #-----------------
+
+sig.mods <- out_epimod_body[[3]]
+
+# Prep Tissue-wide and cell compartment maps
+list_tissue <- list()
+list_comp <- list()
+for (i in 1:length(sig.mods)) {
+  outcomes <- unname(id2symbol[sig.mods[[i]]])
+  
+  list_tissue[[i]] <- parse_means(dat, gene_meth_body, outcomes)
+  
+  pdat_epi <- parse_means(dat, gene_met_epi_body, outcomes)
+  pdat_imm <- parse_means(dat, gene_met_imm_body, outcomes)
+  pdat_stro <- parse_means(dat, gene_met_stro_body, outcomes)
+  list_comp[[i]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
+}
+
+# Combined plot #--------------
+outcomes <- unname(id2symbol[unique(unlist(sig.mods))])
+outcome_labels <- NULL
+p4 <- wrap_summary_plot_multi3(list_tissue,
+                               list_comp,
+                               unname(id2symbol[names(sig.mods)]),
+                               outcomes,
+                               outcome_labels,
+                               covars = covars,
+                               drop_ns = T, 
+                               min_rows = 3)
+p4_grob <- ggplotify::as.grob(p4) 
+
+
+```
+
+```{r, fig.height=12, fig.width=16}
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p3_grob, top = textGrob(
+      "a pCGIs",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p4_grob, top = textGrob(
+      "b oCGIs",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    ))
+  ),
+  layout_matrix = rbind(c(3,4))
+))
+```
+

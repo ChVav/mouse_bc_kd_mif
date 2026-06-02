@@ -1,0 +1,296 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(here)
+library(tidyverse)
+library(patchwork)
+library(emmeans)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(scales)
+library(grid)
+library(gridExtra)
+library(VennDiagram)
+
+```
+
+```{r}
+
+source(here("src/helpers_exposure-modifier.R"))
+source(here("src/helpers_pathway_summary.R"))
+source(here("src/helpers_bipartite_network.R"))
+#source(here("src/wrap_bipartite_networks.R"))
+
+# Helper for parsing singscore output
+parse_sing <- function(pheno_dat, score_df) {
+  dat2 <- scoredf$Scores %>%
+    t() %>%
+    as.data.frame() %>%
+    rownames_to_column(var = "basename")
+  dat2 <- dat2[, colSums(is.na(dat2)) == 0]
+  outcomes <- colnames(dat2)[-1]
+  
+  pdat <- dplyr::full_join(pheno_dat, dat2)
+  
+  return(list(pdat,outcomes))
+}
+
+parse_pathmeans <- function(pheno_dat, path_mean_scores){
+  dat2 <- path_mean_scores %>%
+    dplyr::rename(basename = Sample) %>%
+    pivot_wider(id_cols = basename, names_from = Pathway, values_from = Score)
+  pdat <- dplyr::left_join(pheno_dat, dat2)
+  return(pdat)
+}
+
+# Data load #----
+load(here("data/pheno.Rdata"))
+# Issue with PC doubled columns
+tab   <- table(names(pheno))
+keep  <- names(tab)[tab == 1]        # names that occur once
+pheno  <- pheno[, keep, drop = FALSE]
+pheno_sub <- droplevels(pheno[pheno$Experiment=='exp5' & pheno$Tissue.type %in% c('Breast'),])
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- pheno_sub %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  ) %>%
+  dplyr::select(basename,exposure,keto,mifepristone,diet4)
+
+pc_scores <- readRDS(here("results/analysis2_celltype_adj/2-output/celltype_pc_scores.Rds"))
+dat <- full_join(dat, pc_scores[,1:5])
+covars <- colnames(pc_scores[,1:5])[-1]
+
+```
+
+
+```{r, fig.width = 12, fig.height = 10}
+
+# Limma cancer pathways
+
+# A Promoter up #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_promoters_sigup_singscore.Rdata"))
+pdat1 <- parse_sing(dat,scoredf)[[1]]
+outcomes1 <- parse_sing(dat)[[2]]
+#p1 <- wrap_summary_plot(pdat1, outcomes1)
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat1_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat1_comp) <- c("Epi","Imm","Stro")
+#p1 <- wrap_summary_plot_comp(pdat1, pdat1_comp, outcomes1)
+
+# C Gene body up #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_genebody_sigup_singscore.Rdata"))
+pdat3 <- parse_sing(dat,scoredf)[[1]]
+outcomes3 <- parse_sing(dat)[[2]]
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat3_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat3_comp) <- c("Epi","Imm","Stro")
+#p3 <- wrap_summary_plot_comp(pdat3, pdat3_comp, outcomes3)
+
+# B Promoter down #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_promoters_sigdown_singscore.Rdata"))
+pdat2 <- parse_sing(dat,scoredf)[[1]]
+outcomes2 <- parse_sing(dat)[[2]]
+#p2 <- wrap_summary_plot(pdat2, outcomes2)
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat2_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat2_comp) <- c("Epi","Imm","Stro")
+#p2 <- wrap_summary_plot_comp(pdat2, pdat2_comp, outcomes2)
+
+
+# D Gene body down #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_genebody_sigdown_singscore.Rdata"))
+pdat4 <- parse_sing(dat,scoredf)[[1]]
+outcomes4 <- parse_sing(dat)[[2]]
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat4_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat4_comp) <- c("Epi","Imm","Stro")
+#p4 <- wrap_summary_plot_comp(pdat4, pdat4_comp, outcomes4)
+
+# Combined plot #--------------
+outcomes <- unique(c(outcomes1,outcomes3, outcomes2, outcomes4))
+outcome_labels <- normalize_name(outcomes)
+p3 <- wrap_summary_plot_multi3(list(pdat1,pdat3, pdat2, pdat4 ),
+                              list(pdat1_comp,pdat3_comp,pdat2_comp,pdat4_comp),
+                             c("pCGI hyperM", "oCGI hyperM","pCGI hypoM", "oCGI hypoM"),
+                             outcomes,
+                             outcome_labels,
+                             covars = NULL,
+                             drop_ns = T)
+
+p3_grob <- ggplotify::as.grob(p3) 
+
+```
+
+```{r}
+
+# Plot gene network only for cancer pathways nudged down by ketogenic diet (paper focus)
+# Plot gene promoter and body together, with suffices
+
+# Select paths manually from heatmap
+paths_plot_prom_up <- c("REACTOME_SIALIC_ACID_METABOLISM", 
+             "REACTOME_SIGNALING_BY_GPCR")
+paths_plot_prom_down <- c("REACTOME_REGULATION_OF_MITF_M_DEPENDENT_GENES_INVOLVED_IN_APOPTOSIS", 
+             "REACTOME_SIGNALING_BY_TGFBR3")
+paths_plot_body_up <- c("REACTOME_ACTIVATED_NTRK2_SIGNALS_THROUGH_RAS", 
+             "REACTOME_PHYSIOLOGICAL_FACTORS",
+             "REACTOME_DEFECTIVE_CHSY1_CAUSES_TPBS",
+             "REACTOME_FGFR1_LIGAND_BINDING_AND_ACTIVATION",
+             "REACTOME_FGFR3_LIGAND_BINDING_AND_ACTIVATION",
+             "REACTOME_FGFRL1_MODULATION_OF_FGFR1_SIGNALING",
+             "REACTOME_SIGNALING_BY_GPCR")
+paths_plot_body_down <- c("REACTOME_NEPHRIN_FAMILY_INTERACTIONS",
+             "REACTOME_AEROBIC_RESPIRATION_AND_RESPIRATORY_ELECTRON_TRANSPORT")
+paths_plot <- unique(c(paths_plot_prom_up, paths_plot_body_up,paths_plot_prom_down, paths_plot_body_down))
+
+# Reactome #-----
+gene_reactome_tbl <- readRDS(here("results/0-output/reactome_gene_universe.Rds")) %>%
+  dplyr::select(gene_primary, gs_name) %>%
+  dplyr::filter(gs_name %in% paths_plot)
+
+## Promoter hyperM #-----
+load(here("results/analysis2_celltype_adj/5-output/out_reactome_promoter_pruned.Rdata"))
+gene_meta <- out$gene_meta
+gene_meta$p_adj_gene <- p.adjust(gene_meta$p_gene, method = "BH")
+gene_meta <- gene_meta %>% dplyr::left_join(gene_reactome_tbl, relationship = "many-to-many")
+gene_metap <- gene_meta %>% dplyr::filter(gs_name %in% unique(c(paths_plot_prom_up,paths_plot_prom_down)))
+gene_metap$gs_name <- normalize_name(gene_metap$gs_name)
+gene_metap$gene_primary <- paste0(gene_metap$gene_primary, "_p")# Add suffices
+
+## Gene body hyperM #-----
+load(here("results/analysis2_celltype_adj/5-output/out_reactome_genebody_pruned.Rdata"))
+gene_meta <- out$gene_meta
+gene_meta$p_adj_gene <- p.adjust(gene_meta$p_gene, method = "BH")
+gene_meta <- gene_meta %>% dplyr::left_join(gene_reactome_tbl, relationship = "many-to-many")
+gene_metab <- gene_meta %>% dplyr::filter(gs_name %in% unique(c(paths_plot_body_up,paths_plot_body_down)))
+gene_metab$gs_name <- normalize_name(gene_metab$gs_name)
+gene_metab$gene_primary <- paste0(gene_metab$gene_primary, "_b")# Add suffices
+gene_metab$promoter <- TRUE # set to true to hack prepare_bipartite_data
+
+gene_meta <- rbind(gene_metap, gene_metab)
+
+# Looks cool
+prep <- prepare_bipartite_data(
+  gene_meta,
+  region_var = "promoter",
+  region_value = TRUE,
+  min_genes = 0,
+  p_cutoff = 1,
+  label_thres = 0.75
+)
+
+prep$edges$neglog10_p <- -log10(prep$edges$p_adj_gene)
+g <- build_bipartite_graph(
+  prep$edges,
+  fill_var = "effect",
+  size_var = "neglog10_p",
+  label_var = "effect",
+  label_threshold = prep$threshold,
+  pathway_size = 10,
+  up_pathways = normalize_name(c(paths_plot_prom_up, paths_plot_body_up)),
+  down_pathways = normalize_name(c(paths_plot_prom_down, paths_plot_body_down))
+)
+
+p4 <- plot_bipartite_graph(
+  g,
+  fill_var = "fill_value",
+  fill_name = "Mean Ctrl ΔExposure",
+  size_name = expression(-Log[10](adj. ~ P)),
+  size_labels = scales::number_format(accuracy = 1),
+  layout = "dh",
+  pathway_colors = c(HypoM = "#4575b4", HyperM = "#d73027"),
+  pathway_legend = TRUE,
+  up_pathways = normalize_name(c(paths_plot_prom_up, paths_plot_body_up)),
+  down_pathways = normalize_name(c(
+    paths_plot_prom_down, paths_plot_body_down
+  ))
+)
+
+
+```
+
+```{r, fig.height=16, fig.width=16}
+
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p3_grob, top = textGrob(
+      "a",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p4, top = textGrob(
+      "b Modulated by KD",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    ))
+  ),
+  layout_matrix = rbind(c(NA,1,1,NA), 
+                        c(2,2,2,2)), 
+  heights = c(8,8),
+  widths = c(2,6,6,2)
+))
+```
+

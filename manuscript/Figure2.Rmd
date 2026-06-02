@@ -1,0 +1,202 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(patchwork)
+library(emmeans)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(here)
+library(grid)
+library(gridExtra)
+
+source(here("src/helpers_exposure-modifier.R"))
+source(here("src/clr_ilr_transform.R"))
+source(here("src/helpers_modifier.R"))
+source(here("src/plot_box_raw.R"))
+
+```
+
+```{r}
+
+# Data load #----
+load(here("dat/pheno.Rdata"))
+dat <- droplevels(pheno[pheno$Experiment=='exp5' &
+                          pheno$Tissue.type %in% c('Breast'),])
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- dat %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  )
+
+```
+
+```{r}
+
+# Breast composite scores
+
+outcomes <- c(
+  "index_pantissue",
+  "pcgtMean",
+  "prbsMean", #Progesterone receptor binding sites
+  "erbsMean", #Estrogene receptor binding sites
+  "meth_mean_island",
+  "meth_mean_global_excluding_islands"
+)
+
+outcome_labels <- c(
+  "Carcinogen signature",
+  "Mitotic clock",
+                    "PRBS methylation",
+                    "ERBS methylation",
+                    "Mean CpG island (CGI) methylation",
+                    "Mean CpG non-island methylation")
+
+p1 <- wrap_summary_plot(dat, outcomes, outcome_labels)[[1]]
+
+p1_grob <- ggplotify::as.grob(p1) 
+
+## Effect sizes baseline for text
+check <- wrap_summary_plot(dat, outcomes, outcome_labels)[[2]] %>%
+  dplyr::filter(cell == "Ctrl")
+
+## Modulation
+check <- p1@data
+
+
+
+```
+
+```{r}
+
+# Cell type changes breast
+
+# Combine fat and fibroblasts, set outcomes
+dat$EpiFibFatIc_Stromal <- dat$EpiFibFatIc_Fat + dat$EpiFibFatIc_Fib
+dat <- dat[, !colnames(dat) %in% c("EpiFibFatIc_Fat", "EpiFibFatIc_Fib")]
+
+outcome_cols <- colnames(dat)[grepl("EpiFibFatIc",colnames(dat))]
+outcome_cols1 <- c("EpiFibFatIc_Epi","EpiFibFatIc_IC","EpiFibFatIc_Stromal")
+outcome_cols2 <- setdiff(outcome_cols, outcome_cols1[1:2])
+
+clr_df <- clr_transform(dat,outcome_cols1, c("exposure","keto","mifepristone","diet4"))
+
+labels <- c(
+    "EpiFibFatIc_Epi" = 'Epithelial cells',
+    "EpiFibFatIc_IC" = 'Immune cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+p2 <- wrap_summary_plot(clr_df, names(labels), unname(labels))[[1]]
+
+p2_grob <- ggplotify::as.grob(p2) 
+
+## Effecct sizes baseline for text
+check <- wrap_summary_plot(clr_df, names(labels), unname(labels))[[2]] %>%
+  dplyr::filter(cell == "Ctrl")
+
+
+
+```
+
+```{r}
+
+relab <- c(
+  "Carcinogen signature",
+  "Mitotic clock",
+  "PRBS methylation",
+  "ERBS methylation",
+  "Mean CpG island methylation",
+  "Mean CpG non-island methylation",
+  "Epithelial cells",
+  "Immune cells",
+  "Stroma"
+)
+outcomes <- names(relab) <- c(
+  "index_pantissue",
+  "pcgtMean",
+  "prbsMean", #Progesterone receptor binding sites
+  "erbsMean", #Estrogene receptor binding sites
+  "meth_mean_island",
+  "meth_mean_global_excluding_islands",
+  "EpiFibFatIc_Epi",
+  "EpiFibFatIc_IC",
+  "EpiFibFatIc_Stromal"
+)
+
+plot_list <- c()
+count <- 1
+
+# A Breast #-----------------
+outcome_sig <- map_dfr(outcomes, ~summarize_outcome(.x, dat = droplevels(dat[dat$Tissue.type %in% c('Breast'),]), outcomes = outcomes)) %>%
+  dplyr::filter(keto == "KD-" & mifepristone == "MIF-" & p.value < 0.05) %>%
+  dplyr::pull(outcome)
+
+for (outcome in outcome_sig){
+  plot_list[[count]] <- plot_box_raw(droplevels(dat[dat$Tissue.type %in% c('Breast'),]), outcome, relab)
+  count <- count + 1
+}
+
+p3 <- wrap_plots(plot_list, ncol = 3) +
+  plot_layout(guides = "collect")
+
+p3_grob <- ggplotify::as.grob(p3) 
+
+```
+
+
+```{r, fig.height=12, fig.width=14}
+
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p1_grob, top = textGrob(
+      "b",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p2_grob, top = textGrob(
+      "c",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p3_grob, top = textGrob(
+      "d",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    ))
+  ),
+  layout_matrix = rbind(c(1,2),
+                        c(1,NA),
+                        c(3,3)),
+  heights = c(2,0.5,4)
+))
+```
+

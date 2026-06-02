@@ -1,0 +1,100 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(patchwork)
+library(emmeans)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(here)
+library(grid)
+library(gridExtra)
+
+source(here("src/helpers_exposure-modifier.R"))
+source(here("src/clr_ilr_transform.R"))
+
+```
+
+```{r, fig.height=8, fig.width=7}
+
+# Data load #----
+load(here("data/pheno.Rdata"))
+
+dat <- droplevels(pheno[pheno$Experiment=='exp5',])
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- dat %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  )
+
+outcomes <- c(
+  "index_pantissue",
+  "pcgtMean",
+  "prbsMean", #Progesterone receptor binding sites
+  "erbsMean", #Estrogene receptor binding sites
+  "meth_mean_island",
+  "meth_mean_global_excluding_islands"
+)
+
+outcome_labels <- c(
+  "Carcinogen signature",
+  "Mitotic clock",
+                    "PRBS methylation",
+                    "ERBS methylation",
+                    "Mean CpG island methylation",
+                    "Mean CpG non-island methylation")
+
+# A Breast #-----------------
+
+pdat1 <- droplevels(dat[dat$Tissue.type %in% c('Breast'),])
+#p1 <- wrap_summary_plot(pdat1, outcomes)[[1]]
+
+# B cervix #-----------------
+
+pdat2 <- droplevels(dat[dat$Tissue.type %in% c('Cervix'),])
+check <- wrap_summary_plot(pdat2, outcomes)[[2]] %>%
+  dplyr::filter(cell == "Ctrl")
+
+# C oviduct #-----------------
+
+pdat3 <- droplevels(dat[dat$Tissue.type %in% c('Oviduct'),])
+check <- wrap_summary_plot(pdat3, outcomes)[[2]] %>%
+  dplyr::filter(cell == "Ctrl")
+
+# D blood #-----------------
+
+pdat4 <- droplevels(dat[dat$Tissue.type %in% c('PBMCs'),])
+check <- wrap_summary_plot(pdat4, outcomes)[[2]] %>%
+  dplyr::filter(cell == "Ctrl")
+
+# Combined plot #--------------
+wrap_summary_plot_multi(list(pdat1, pdat2, pdat3, pdat4),
+                             c("Mammary tissue", "Cervix", "Oviduct", "Blood"),
+                             outcomes,
+                             outcome_labels)
+
+```
+

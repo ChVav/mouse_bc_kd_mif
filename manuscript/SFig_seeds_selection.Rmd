@@ -1,0 +1,99 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(here)
+library(ggrepel)
+library(scales)
+library(patchwork)
+
+source(here("src/helpers_pageRank.R"))
+
+```
+
+```{r}
+
+# DMP results baseline
+dmp_base <- readRDS(here("results/analysis2_celltype_adj/2-output/breast_limma_celltype_adj.Rds")) %>%
+  dplyr::filter(keto == "KD-" & mifepristone == "MIF+")
+dmp_base$outcome <- gsub("_logit","", dmp_base$outcome)
+anno <- readRDS(here("results/0-output/anno2_genes_filtered.Rds"))
+dmp_base <- left_join(dmp_base,anno, by = c("outcome" = "Name"))
+
+dmp_prom <- dmp_base %>% dplyr::filter(promoter == TRUE & p.adj_cell < 0.05) %>% pull(ENTREZID) %>% unique() %>% na.omit() #310 gene prim, 294 entrez
+dmp_body <- dmp_base %>% dplyr::filter(promoter == FALSE & p.adj_cell < 0.05) %>% pull(ENTREZID) %>% unique() %>% na.omit() #498 gene prim, 468 entrez
+
+# gene_primary, entrez
+annot <- readRDS(here("results/0-output/anno2_genes_filtered.Rds")) %>%
+  dplyr::select(gene_primary, ENTREZID) %>%
+  distinct() #27031
+
+id2symbol <- setNames(
+  annot$gene_primary,
+  annot$ENTREZID
+)
+
+# Gene-level summary methy base
+dat_base <- readRDS(here("results/analysis2_celltype_adj/3-output/gene_base_meta_universe.Rds")) %>%
+  dplyr::left_join(annot, by = "gene_primary") %>%
+  dplyr::filter(ENTREZID %in% c(dmp_prom, dmp_body)) # focus on genes with DMP
+
+# Seed proximity info #----
+configs <- list(
+  list(file = "ppr_pr_ext.Rds",          title = "PR regulatory network"),
+  list(file = "ppr_rankl_nfbk.Rds",      title = "RANKL–NF-κB"),
+  list(file = "ppr_wnt_ext.Rds",         title = "Wnt/β-catenin signaling"),
+  list(file = "ppr_prl_stat5.Rds",       title = "PRL–JAK2–STAT5 signaling"),
+  list(file = "ppr_ccnd1_ext.Rds",       title = "CCND1/cell-cycle"),
+  list(file = "ppr_pi3k_akt_mtor.Rds",   title = "PI3K–AKT–mTOR signaling"),
+  list(file = "ppr_survival_nfkb.Rds",   title = "NF-κB survival")
+)
+base_path <- here("results/2-output/")
+
+plot_list <- list()
+
+for (cfg in configs) {
+  ranked <- readRDS(file.path(base_path, cfg$file))
+  
+  plots <- list(
+    plot_ppr_base_pval_logfold(
+      ranked, dat_base,
+      promoter_var = TRUE,
+      seed_tit = cfg$title,
+      top_genes = 10
+    ) + ggtitle("pCGIs"),
+    
+    plot_ppr_base_pval_logfold(
+      ranked, dat_base,
+      promoter_var = FALSE,
+      seed_tit = cfg$title,
+      top_genes = 10
+    ) + ggtitle("oCGIs")
+  )
+  
+  plot_list <- c(plot_list, plots)
+}
+
+```
+
+```{r, fig.width = 16, fig.height = 16}
+
+wrap_plots(plot_list, ncol = 4) +
+  plot_annotation(tag_levels = "a") +
+  plot_layout(guides = "collect")
+
+```
+
+
+

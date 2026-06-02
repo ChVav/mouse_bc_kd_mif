@@ -1,0 +1,210 @@
+---
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+  html_document:
+    toc: false
+    paged: false
+header-includes: \usepackage{fontspec, pdfpages, graphicx} \setmainfont{Times New Roman} \pagestyle{empty}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(patchwork)
+library(emmeans)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(here)
+library(grid)
+library(gridExtra)
+
+source(here("src/clr_ilr_transform.R"))
+source(here("src/helpers_modifier.R"))
+
+```
+
+```{r}
+# Breast cancer only
+load(here("data/pheno.Rdata"))
+dat <- droplevels(pheno[pheno$Experiment=='exp5' &
+                          pheno$Tissue.type %in% c('Breast'),])
+
+# Note that there seems to be an issue with the metabolomics data
+# For some reason, several PCs are pulled in.
+# Lets remove all off these
+tab   <- table(names(dat))
+keep  <- names(tab)[tab == 1]        # names that occur once
+dat  <- dat[, keep, drop = FALSE]
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- dat %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  )
+# Combine fat and fibroblasts, set outcomes
+dat$EpiFibFatIc_Stromal <- dat$EpiFibFatIc_Fat + dat$EpiFibFatIc_Fib
+dat <- dat[, !colnames(dat) %in% c("EpiFibFatIc_Fat", "EpiFibFatIc_Fib")]
+
+outcome_cols <- colnames(dat)[grepl("EpiFibFatIc",colnames(dat))]
+outcome_cols1 <- c("EpiFibFatIc_Epi","EpiFibFatIc_IC","EpiFibFatIc_Stromal")
+outcome_cols2 <- setdiff(outcome_cols, outcome_cols1[1:2])
+
+# Broader level
+clr_df <- clr_transform(dat,outcome_cols1, c("exposure","keto","mifepristone","diet4"))
+labels <- c(
+    "EpiFibFatIc_Epi" = 'Epithelial cells',
+    "EpiFibFatIc_IC" = 'Immune cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+clr_df <- clr_df %>% dplyr::filter(exposure == "P/D+")
+
+p1 <- wrap_summary_plot_simple(clr_df, names(labels), labels)
+
+
+# hepidish
+clr_df <- clr_transform(dat,outcome_cols2, c("exposure","keto","mifepristone","diet4"))
+labels <- c(
+    "EpiFibFatIc_basal" = 'Basal cells',
+    "EpiFibFatIc_luminal_progenitor"= 'Luminal progenitor cells',
+    "EpiFibFatIc_mature_luminal"= 'Mature luminal cells',
+    "EpiFibFatIc_B" = 'B cells',
+    "EpiFibFatIc_CD4T" = 'CD4 T cells',
+    "EpiFibFatIc_CD8T" = 'CD8 T cells',
+    "EpiFibFatIc_MDSC" = 'MDSCs',
+    "EpiFibFatIc_Neutro" = 'Neutrophils',
+    "EpiFibFatIc_NK" = 'NK cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+clr_df <- clr_df %>% dplyr::filter(exposure == "P/D+")
+
+p2 <- wrap_summary_plot_simple(clr_df, names(labels), labels)
+
+
+```
+
+
+```{r}
+
+# Tumor tissue
+dat <- droplevels(pheno[pheno$Experiment=='exp5' &
+                          pheno$Tissue.type %in% c('Breast tumor'),])
+
+# Note that there seems to be an issue with the metabolomics data
+# For some reason, several PCs are pulled in.
+# Lets remove all off these
+tab   <- table(names(dat))
+keep  <- names(tab)[tab == 1]        # names that occur once
+dat  <- dat[, keep, drop = FALSE]
+
+# Reformat for 2x2x2 design, and diet groups for raw plots
+dat <- dat %>%
+  mutate(
+    exposure      = factor(ifelse(grepl("\\bMPA/DMBA\\+", Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("P/D-", "P/D+")),
+    keto          = factor(ifelse(grepl("\\bKD\\+",       Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("KD-", "KD+")),
+    mifepristone  = factor(ifelse(grepl("\\bMIF\\+",      Treatment), 1, 0),
+                           levels = c(0, 1), labels = c("MIF-", "MIF+"))
+  ) %>%
+  mutate(
+    diet4 = factor(
+      paste0(keto, " ", mifepristone),
+      levels = c("KD- MIF-",  "KD+ MIF-", "KD- MIF+", "KD+ MIF+")
+    )
+  ) %>%
+  droplevels()
+
+# Combine fat and fibroblasts, set outcomes
+dat$EpiFibFatIc_Stromal <- dat$EpiFibFatIc_Fat + dat$EpiFibFatIc_Fib
+dat <- dat[, !colnames(dat) %in% c("EpiFibFatIc_Fat", "EpiFibFatIc_Fib")]
+
+outcome_cols <- colnames(dat)[grepl("EpiFibFatIc",colnames(dat))]
+outcome_cols1 <- c("EpiFibFatIc_Epi","EpiFibFatIc_IC","EpiFibFatIc_Stromal")
+outcome_cols2 <- setdiff(outcome_cols, outcome_cols1[1:2])
+
+# Broader level
+clr_df <- clr_transform(dat,outcome_cols1, c("exposure","keto","mifepristone","diet4"))
+labels <- c(
+    "EpiFibFatIc_Epi" = 'Epithelial cells',
+    "EpiFibFatIc_IC" = 'Immune cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+p3 <- wrap_summary_plot_simple(clr_df, names(labels), labels)
+
+# HepiDish
+clr_df <- clr_transform(dat,outcome_cols2, c("exposure","keto","mifepristone","diet4"))
+labels <- c(
+    "EpiFibFatIc_basal" = 'Basal cells',
+    "EpiFibFatIc_luminal_progenitor"= 'Luminal progenitor cells',
+    "EpiFibFatIc_mature_luminal"= 'Mature luminal cells',
+    "EpiFibFatIc_B" = 'B cells',
+    "EpiFibFatIc_CD4T" = 'CD4 T cells',
+    #"EpiFibFatIc_CD8T" = 'CD8 T cells',
+    "EpiFibFatIc_MDSC" = 'MDSCs',
+    "EpiFibFatIc_Neutro" = 'Neutrophils',
+    "EpiFibFatIc_NK" = 'NK cells',
+    "EpiFibFatIc_Stromal" = 'Stroma'
+  )
+
+p4 <- wrap_summary_plot_simple(clr_df, names(labels), labels)
+
+
+```
+
+```{r, fig.height=10, fig.width=8}
+
+
+# combine plots #----
+invisible(grid.arrange(
+  grobs = list(
+    arrangeGrob(p1, top = textGrob(
+      "a Mammary tissue at risk",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p2, top = textGrob(
+      "b",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+     arrangeGrob(p3, top = textGrob(
+      "c Mammary tumor",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    )),
+    arrangeGrob(p4, top = textGrob(
+      "d",
+      gp = gpar(fontsize = 12, fontface = "bold"),
+      x = unit(0, "npc"),
+      hjust = 0
+    ))
+  ),
+  layout_matrix = rbind(c(1,2),
+                        c(NA,2),
+                        c(3,4),
+                        c(NA,4))
+))
+```
+
+
+
