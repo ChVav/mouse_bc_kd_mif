@@ -421,63 +421,6 @@ prune_by_overlapcoef <- function(lv, fdr = NULL, g = NULL, coef_thresh = 0.80) {
   lv[keep]
 }
 
-# Code to assign colors to vectors
-vect2color = function(v, palettev, breaks) {
-  w = v; 
-  for (i in 1:length(palettev)) { w[which( v >= breaks[i] & v < breaks[i+1] )] = palettev[i]; }
-  return(w);
-}
-
-renderModule <- function(eid, g, pval, stat, 
-                         vertex_cols = c("yellow","blue", mid="white"),
-                         k = 50,
-                         id2symbol = NULL, 
-                         use_symbols = FALSE) {
-  
-  # --- Vertex palette ---
-  vertexPalette.v <- maPalette(low = vertex_cols[1], high = vertex_cols[2], mid = vertex_cols[3], k = k-1)
-  vertexBreaks.v <- seq(from = log10(0.05), to = -log10(0.05), 
-                        by = -2*log10(0.05)/(-2 + length(vertexPalette.v)))
-  vertexBreaks.v <- c(-(1 + max(-log10(pval))), vertexBreaks.v, 1 + max(-log10(pval)))
-  
-  # --- Induced subgraph ---
-  h <- induced_subgraph(g, vids = which(V(g)$name %in% eid))
-  
-  # --- Node statistics ---
-  stat.v <- stat[V(h)$name]
-  pval.v <- pval[V(h)$name]
-  slpval.v <- sign(stat.v) * -log10(pval.v)
-  
-  # --- Vertex labels ---
-  if (!is.null(id2symbol) && use_symbols) {
-    labels <- id2symbol[V(h)$name]
-    labels[is.na(labels)] <- V(h)$name
-  } else {
-    labels <- V(h)$name
-  }
-  
-  vl <- if(length(V(h)) <= 350) labels else ""
-  
-  # --- Vertex colors ---
-  V(h)$color <- vect2color(slpval.v, vertexPalette.v, vertexBreaks.v)
-  
-  # --- Edge colors: grayscale ---
-  w <- E(h)$weight
-  w_norm <- (w - min(w)) / (max(w) - min(w))
-  E(h)$color <- gray(1 - w_norm)
-  
-  # --- Plot ---
-  plot(h, layout = layout_with_fr(h),
-       vertex.label = vl,
-       vertex.label.dist = if(length(V(h)) < 50) 1.25 else 0.5,  # less offset
-       vertex.label.font = 3, vertex.label.color = "black",
-       vertex.frame.color = "black",
-       vertex.size = if(length(V(h)) < 50) 10 else 10*13/length(V(h)), # smaller nodes
-       edge.width = if(length(V(h)) < 50) 6 else 160/length(V(h)),
-       edge.color = E(h)$color
-  )
-}
-
 renderModule_gg <- function(
     eid, g, pval, stat,
     vertex_cols = c("yellow", "blue", mid = "white"),
