@@ -12,7 +12,7 @@ Precalculated DNA methylation scores, cell type estimates and mouse phenotypic d
 To start please, download the raw data and create a file called beta_final.Rdata as described by Barrett et al and store it in /data.<br>
 Rows = CpGs, Columns = samples. <br>
 <br>
-In /data also store:
+In /data also store: <br>
 * mouse phenotypic data [Zenodo]
 * PPI from Biogrid (extract from https://downloads.thebiogrid.org/File/BioGRID/Release-Archive/BIOGRID-5.0.255/BIOGRID-ORGANISM-5.0.255.mitab.zip)
 * PPI from IntAct (intact_2.7_mouse.txt; miTab 2.7 from https://www.ebi.ac.uk/intact/interactomes)
