@@ -255,79 +255,53 @@ p3 <- ggraph(tg, layout = "stress") +
 
 ```{r}
 
-# Promoter #-----------------
+crosstalk_genes <- seeds.genes %>%
+  count(gene_primary) %>%
+  filter(n >= 3) %>%
+  pull(gene_primary)
 
-seeds.genes <- readRDS(here("results/analysis2_celltype_adj/13-output/ppr_proximal_genes.Rds")) %>% dplyr::filter(promoter == TRUE)
-sig.seeds <- c("PR regulatory network", "RANKL–NF-κB", "Wnt/β-catenin signaling", 
-               "PRL–JAK2–STAT5 signaling", "CCND1/cell-cycle", "PI3K–AKT–mTOR signaling", "NF-κB survival")
-sig.seeds2 <- gsub("PI3K–AKT–mTOR signaling","PAM",sig.seeds)
+seeds.genes <- readRDS(here("results/analysis2_celltype_adj/13-output/ppr_proximal_genes.Rds")) %>%
+  dplyr::filter(gene_primary %in% crosstalk_genes)
 
 # Prep Tissue-wide and cell compartment maps
 list_tissue <- list()
 list_comp <- list()
-for (i in 1:length(sig.seeds)) {
+
+# Promoter  
+outcomes <- seeds.genes %>% dplyr::filter(promoter == TRUE) %>% pull(gene_primary)
   
-  outcomes <- seeds.genes %>% dplyr::filter(seed == sig.seeds[i]) %>% pull(gene_primary)
+list_tissue[[1]] <- parse_means(dat, gene_meth_prom, outcomes)
   
-  list_tissue[[i]] <- parse_means(dat, gene_meth_prom, outcomes)
+pdat_epi <- parse_means(dat, gene_met_epi_prom, outcomes)
+pdat_imm <- parse_means(dat, gene_met_imm_prom, outcomes)
+pdat_stro <- parse_means(dat, gene_met_stro_prom, outcomes)
+list_comp[[1]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
+
+# Gene body 
+outcomes <- seeds.genes %>% dplyr::filter(promoter == FALSE) %>% pull(gene_primary)
   
-  pdat_epi <- parse_means(dat, gene_met_epi_prom, outcomes)
-  pdat_imm <- parse_means(dat, gene_met_imm_prom, outcomes)
-  pdat_stro <- parse_means(dat, gene_met_stro_prom, outcomes)
-  list_comp[[i]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
-}
+list_tissue[[2]] <- parse_means(dat, gene_meth_body, outcomes)
+  
+pdat_epi <- parse_means(dat, gene_met_epi_body, outcomes)
+pdat_imm <- parse_means(dat, gene_met_imm_body, outcomes)
+pdat_stro <- parse_means(dat, gene_met_stro_body, outcomes)
+list_comp[[2]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
 
 # Combined plot #--------------
 outcomes <- unique(seeds.genes$gene_primary)
 outcome_labels <- NULL
 p4 <- wrap_summary_plot_multi3(list_tissue,
                                list_comp,
-                               sig.seeds2,
+                               c("pCGI","oCGI"),
                                outcomes,
                                outcome_labels,
                                covars = covars,
                                drop_ns = T)
 p4_grob <- ggplotify::as.grob(p4) 
 
-# Gene body #-----------------
-
-seeds.genes <- readRDS(here("results/analysis2_celltype_adj/13-output/ppr_proximal_genes.Rds")) %>% dplyr::filter(promoter == FALSE)
-sig.seeds <- c("PR regulatory network", "RANKL–NF-κB", "Wnt/β-catenin signaling", 
-               "PRL–JAK2–STAT5 signaling", "CCND1/cell-cycle", "PI3K–AKT–mTOR signaling", "NF-κB survival")
-sig.seeds2 <- gsub("PI3K–AKT–mTOR signaling","PAM",sig.seeds)
-
-# Prep Tissue-wide and cell compartment maps
-list_tissue <- list()
-list_comp <- list()
-for (i in 1:length(sig.seeds)) {
-  
-  outcomes <- seeds.genes %>% dplyr::filter(seed == sig.seeds[i]) %>% pull(gene_primary)
-  
-  list_tissue[[i]] <- parse_means(dat, gene_meth_body, outcomes)
-  
-  pdat_epi <- parse_means(dat, gene_met_epi_body, outcomes)
-  pdat_imm <- parse_means(dat, gene_met_imm_body, outcomes)
-  pdat_stro <- parse_means(dat, gene_met_stro_body, outcomes)
-  list_comp[[i]] <- setNames(list(pdat_epi, pdat_imm, pdat_stro), c("Epi", "Imm", "Stro"))
-}
-
-# Combined plot #--------------
-outcomes <- unique(seeds.genes$gene_primary)
-outcome_labels <- NULL
-p5 <- wrap_summary_plot_multi3(list_tissue,
-                               list_comp,
-                               sig.seeds2,
-                               outcomes,
-                               outcome_labels,
-                               covars = covars,
-                               drop_ns = T)
-p5_grob <- ggplotify::as.grob(p5) 
-
 ```
 
-
-
-```{r, fig.height=25, fig.width=16}
+```{r, fig.height=12, fig.width=12}
 
 # combine plots #----
 invisible(grid.arrange(
@@ -355,22 +329,13 @@ invisible(grid.arrange(
       gp = gpar(fontsize = 12, fontface = "bold"),
       x = unit(0, "npc"),
       hjust = 0
-    )),
-    arrangeGrob(p5_grob, top = textGrob(
-      "e oCGIs",
-      gp = gpar(fontsize = 12, fontface = "bold"),
-      x = unit(0, "npc"),
-      hjust = 0
     ))
   ),
-  layout_matrix = rbind(c(1,1,2,2,3,3),
-                        c(4,4,4,5,5,5)),
-  heights = c(4,15)
+  layout_matrix = rbind(c(1,2),
+                        c(3,4))
 ))
 
 
 ```
-
-
 
 
