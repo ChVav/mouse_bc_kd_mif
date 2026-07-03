@@ -325,7 +325,7 @@ invisible(grid.arrange(
       hjust = 0
     )),
     arrangeGrob(p4_grob, top = textGrob(
-      "d pCGIs",
+      "d",
       gp = gpar(fontsize = 12, fontface = "bold"),
       x = unit(0, "npc"),
       hjust = 0
