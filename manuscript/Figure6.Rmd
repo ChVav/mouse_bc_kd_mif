@@ -15,32 +15,45 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 library(here)
 library(tidyverse)
 library(patchwork)
-library(igraph)
-library(ggraph)
-library(marray)
+library(emmeans)
+library(showtext) # so arrows and delta are rendered properly
+showtext_auto()
+library(scales)
 library(grid)
 library(gridExtra)
+library(VennDiagram)
 
 ```
 
 ```{r}
 
 source(here("src/helpers_exposure-modifier.R"))
-source(here("src/epimods_functions.R"))
+source(here("src/helpers_pathway_summary.R"))
+source(here("src/helpers_bipartite_network.R"))
 
-parse_means <- function(pheno_dat, gene_meth, epimod_genes){
-  dat <-gene_meth %>%
-    dplyr::filter(gene_primary %in% epimod_genes)  %>%# filter out epimod genes
-    column_to_rownames(var = "gene_primary") %>%
-    dplyr::select(-n_cpg) %>%
+# Helper for parsing singscore output
+parse_sing <- function(pheno_dat, score_df) {
+  dat2 <- scoredf$Scores %>%
     t() %>%
     as.data.frame() %>%
-    rownames_to_column(var = "basename") 
-  dat <- dplyr::left_join(pheno_dat, dat, by = "basename")
-  return(dat)
+    rownames_to_column(var = "basename")
+  dat2 <- dat2[, colSums(is.na(dat2)) == 0]
+  outcomes <- colnames(dat2)[-1]
+  
+  pdat <- dplyr::full_join(pheno_dat, dat2)
+  
+  return(list(pdat,outcomes))
 }
 
-# Pheno #----
+parse_pathmeans <- function(pheno_dat, path_mean_scores){
+  dat2 <- path_mean_scores %>%
+    dplyr::rename(basename = Sample) %>%
+    pivot_wider(id_cols = basename, names_from = Pathway, values_from = Score)
+  pdat <- dplyr::left_join(pheno_dat, dat2)
+  return(pdat)
+}
+
+# Data load #----
 load(here("data/pheno.Rdata"))
 
 pheno_sub <- droplevels(pheno[pheno$Experiment=='exp5' & pheno$Tissue.type %in% c('Breast'),])
@@ -67,213 +80,316 @@ pc_scores <- readRDS(here("results/analysis2_celltype_adj/2-output/celltype_pc_s
 dat <- full_join(dat, pc_scores[,1:5])
 covars <- colnames(pc_scores[,1:5])[-1]
 
-# Epimod info #----
-load(here("results/analysis2_celltype_adj/12-output/epimods_promoter.Rdata"))
-out_epimod_prom <- out
-load(here("results/analysis2_celltype_adj/12-output/epimods_genebody.Rdata"))
-out_epimod_body <- out
-rm(out);invisible(gc())
- 
-annot <- readRDS(here("results/0-output/anno2_genes_filtered.Rds"))
+```
 
-id2symbol <- setNames(
-  annot$gene_primary,
-  annot$ENTREZID
+```{r}
+
+pdat <- readRDS(here("results/analysis2_celltype_adj/6-output/themes_paths_0.01.Rds")) %>%
+  count(gene_region, theme_primary) %>%
+  arrange(desc(n))
+pdat$theme_primary <- factor(pdat$theme_primary, levels = rev(unique(pdat$theme_primary)))
+
+p1 <- ggplot(pdat, aes(x = theme_primary, y = n, fill = gene_region)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(
+    x = "",
+    y = "Number of significant pathways",
+    fill = ""
+  ) +
+  scale_fill_manual(values = c("darkslategray4","darkkhaki"),
+    labels = c("Promoter" = "pCGI",
+               "Gene body" = "oCGI")) +
+  theme_classic() + 
+  theme(legend.position = "bottom")
+
+region_lists <- readRDS(here("results/analysis2_celltype_adj/6-output/themes_paths_0.01.Rds")) %>%
+  dplyr::mutate(gene_region = case_when(gene_region == "Promoter" ~ "pCGI", TRUE ~ "oCGI")) %>%
+  group_by(gene_region) %>%
+  summarise(pathways = list(unique(gs_name_norm))) %>%
+  deframe()
+overlap <- intersect(region_lists[[1]], region_lists[[2]])
+
+venn_glist <- VennDiagram::venn.diagram(
+  x = region_lists,
+  filename = NULL,
+  fill = c("darkkhaki","darkslategray4"),
+  alpha = 0.5,
+  cex = 1.2,
+  # disable category labels to avoid expanding the bbox
+  cat.cex = 0,
+  margin = 0.02
 )
 
-# gene summaries bulk #-----
+venn_base <- grobTree(grobs = venn_glist)
 
-gene_meth_prom <- readRDS(here("results/analysis2_celltype_adj/6-output/island_breast_genemeanmeth_promoters.Rds"))
-gene_meth_body <- readRDS(here("results/analysis2_celltype_adj/6-output/island_breast_genemeanmeth_genebody.Rds"))
+# Add your own labels near the circles if needed
+label_left  <- names(region_lists)[1]
+label_right <- names(region_lists)[2]
 
-# gene summaries cell type compartments #-----
+p2_grob <- grobTree(
+  venn_base,
+  # manual labels (tune x/y as needed)
+  textGrob(label_left,  x = 0.30, y = 0.92, gp = gpar(fontsize = 10, fontface = "bold")),
+  textGrob(label_right, x = 0.70, y = 0.92, gp = gpar(fontsize = 10, fontface = "bold")),
+  textGrob(
+    paste(overlap, collapse = "\n"),
+    x = 0.5, y = 0.08, just = "center", gp = gpar(fontsize = 9)
+  ),
+  linesGrob(
+    x = unit(c(0.5, 0.5), "npc"),
+    y = unit(c(0.18, 0.5), "npc"),
+    gp = gpar(lwd = 1)
+  )
+)
+```
 
-gene_met_epi_prom <- readRDS(here("results/analysis3_tensor/1-output/base_epi_genemeanmeth_promoters.Rds"))
-gene_met_imm_prom <- readRDS(here("results/analysis3_tensor/1-output/base_imm_genemeanmeth_promoters.Rds"))
-gene_met_stro_prom <- readRDS(here("results/analysis3_tensor/1-output/base_stro_genemeanmeth_promoters.Rds"))
-gene_met_epi_body <- readRDS(here("results/analysis3_tensor/1-output/base_epi_genemeanmeth_genebody.Rds"))
-gene_met_imm_body <- readRDS(here("results/analysis3_tensor/1-output/base_imm_genemeanmeth_genebody.Rds"))
-gene_met_stro_body <- readRDS(here("results/analysis3_tensor/1-output/base_stro_genemeanmeth_genebody.Rds"))
+
+```{r}
+
+# Limma cancer pathways
+
+# A Promoter up #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_promoters_sigup_singscore.Rdata"))
+pdat1 <- parse_sing(dat,scoredf)[[1]]
+outcomes1 <- parse_sing(dat)[[2]]
+#p1 <- wrap_summary_plot(pdat1, outcomes1)
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_promoters_sigup_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat1_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat1_comp) <- c("Epi","Imm","Stro")
+#p1 <- wrap_summary_plot_comp(pdat1, pdat1_comp, outcomes1)
+
+# C Gene body up #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_genebody_sigup_singscore.Rdata"))
+pdat3 <- parse_sing(dat,scoredf)[[1]]
+outcomes3 <- parse_sing(dat)[[2]]
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_genebody_sigup_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat3_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat3_comp) <- c("Epi","Imm","Stro")
+#p3 <- wrap_summary_plot_comp(pdat3, pdat3_comp, outcomes3)
+
+# B Promoter down #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_promoters_sigdown_singscore.Rdata"))
+pdat2 <- parse_sing(dat,scoredf)[[1]]
+outcomes2 <- parse_sing(dat)[[2]]
+#p2 <- wrap_summary_plot(pdat2, outcomes2)
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_promoters_sigdown_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat2_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat2_comp) <- c("Epi","Imm","Stro")
+#p2 <- wrap_summary_plot_comp(pdat2, pdat2_comp, outcomes2)
+
+# D Gene body down #-----------------
+
+# Tissue-wide maps
+load(here("results/analysis2_celltype_adj/6-output/breast_reactome_genebody_sigdown_singscore.Rdata"))
+pdat4 <- parse_sing(dat,scoredf)[[1]]
+outcomes4 <- parse_sing(dat)[[2]]
+
+# Cell compartment map added, pathway means
+load(here("results/analysis3_tensor/2-output/base_epi_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_epi <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_imm_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_imm <- parse_pathmeans(dat,path_mean_scores)
+load(here("results/analysis3_tensor/2-output/base_stro_reactome_genebody_sigdown_pathmean.Rdata"))
+pdat_stro <- parse_pathmeans(dat,path_mean_scores)
+pdat4_comp <- list(pdat_epi,pdat_imm,pdat_stro)
+names(pdat4_comp) <- c("Epi","Imm","Stro")
+#p4 <- wrap_summary_plot_comp(pdat4, pdat4_comp, outcomes4)
+
+# Combined plot #--------------
+outcomes <- unique(c(outcomes1,outcomes3, outcomes2, outcomes4))
+outcome_labels <- normalize_name(outcomes)
+p3 <- wrap_summary_plot_multi3(list(pdat1,pdat3, pdat2, pdat4 ),
+                              list(pdat1_comp,pdat3_comp,pdat2_comp,pdat4_comp),
+                             c("pCGI hyperM", "oCGI hyperM","pCGI hypoM", "oCGI hypoM"),
+                             outcomes,
+                             outcome_labels,
+                             covars = covars,
+                             drop_ns = T)
+
+p3_grob <- ggplotify::as.grob(p3) 
+
+```
+
+```{r, eval = F}
+
+# Plot gene network only for cancer pathways nudged down by ketogenic diet (paper focus)
+# Plot gene promoter and body together, with suffices
+# this doesnt work with dh, and the other plotting schemes show this is way too complicated.
+# Lets focus on promoter regions
+
+# Select paths manually from heatmap
+paths <- unique(p3@data$outcome)
+paths_plot_prom_up <- gsub("___Promoter hyperM","",paths[grepl("__Promoter hyperM", paths)])
+rem <- c("REACTOME_KIDNEY_DEVELOPMENT", "REACTOME_CARDIOGENESIS","REACTOME_ACTIVATION_OF_TRKA_RECEPTORS")
+paths_plot_prom_up <- setdiff(paths_plot_prom_up, rem)
+paths_plot_body_up <- gsub("___Gene body hyperM","",paths[grepl("__Gene body hyperM", paths)])
+rem <- c("REACTOME_PHASE_1_INACTIVATION_OF_FAST_NA_CHANNELS",
+         "REACTOME_REGULATION_OF_TP53_ACTIVITY_THROUGH_ASSOCIATION_WITH_CO_FACTORS","REACTOME_DEFECTIVE_CHSY1_CAUSES_TPBS",
+         "REACTOME_NUCLEAR_SIGNALING_BY_ERBB4")
+paths_plot_body_up <- setdiff(paths_plot_body_up, rem)
+paths_plot <- unique(c(paths_plot_prom_up, paths_plot_body_up))
+
+# Reactome #-----
+gene_reactome_tbl <- readRDS(here("results/0-output/reactome_gene_universe.Rds") %>%
+  dplyr::select(gene_primary, gs_name) %>%
+  dplyr::filter(gs_name %in% paths_plot)
+
+## Promoter#-----
+load(here("results/analysis2_celltype_adj/5-output/out_reactome_promoter_pruned.Rdata")
+gene_meta <- out$gene_meta
+gene_meta$p_adj_gene <- p.adjust(gene_meta$p_gene, method = "BH")
+gene_meta <- gene_meta %>% dplyr::left_join(gene_reactome_tbl, relationship = "many-to-many")
+gene_metap <- gene_meta %>% dplyr::filter(gs_name %in% paths_plot_prom_up)
+gene_metap$gs_name <- normalize_name(gene_metap$gs_name)
+gene_metap$gene_primary <- paste0(gene_metap$gene_primary, "_p")# Add suffices
+
+## Gene body#-----
+load(here("results/analysis2_celltype_adj/5-output/out_reactome_genebody_pruned.Rdata")
+gene_meta <- out$gene_meta
+gene_meta$p_adj_gene <- p.adjust(gene_meta$p_gene, method = "BH")
+gene_meta <- gene_meta %>% dplyr::left_join(gene_reactome_tbl, relationship = "many-to-many")
+gene_metab <- gene_meta %>% dplyr::filter(gs_name %in% paths_plot_body_up)
+gene_metab$gs_name <- normalize_name(gene_metab$gs_name)
+gene_metab$gene_primary <- paste0(gene_metab$gene_primary, "_b")# Add suffices
+gene_metab$promoter <- TRUE # set to true to hack prepare_bipartite_data
+
+gene_meta <- rbind(gene_metap, gene_metab)
+
+# Looks cool
+prep <- prepare_bipartite_data(
+  gene_meta,
+  region_var = "promoter",
+  region_value = TRUE,
+  min_genes = 0,
+  p_cutoff = 1,
+  label_thres = 0.75
+)
+
+prep$edges$neglog10_p <- -log10(prep$edges$p_adj_gene)
+g <- build_bipartite_graph(
+  prep$edges,
+  fill_var = "effect",
+  size_var = "neglog10_p",
+  label_var = "effect",
+  label_threshold = prep$threshold,
+  pathway_size = 10,
+  up_pathways = normalize_name(c(paths_plot_prom_up, paths_plot_body_up)),
+  down_pathways = NULL
+)
+
+p4 <- plot_bipartite_graph(
+  g,
+  fill_var = "fill_value",
+  fill_name = "Mean Ctrl ΔExposure",
+  size_name = expression(-log[10](adj. ~ P value)),
+  size_labels = scales::number_format(accuracy = 1),
+  layout = "dh",
+  pathway_colors = c(HypoM = "#4575b4", HyperM = "#d73027"),
+  pathway_legend = TRUE,
+  up_pathways = normalize_name(c(paths_plot_prom_up, paths_plot_body_up)),
+  down_pathways = NULL
+)
+
 
 ```
 
 ```{r}
 
-p1 <- plot_fdr_genecount(out_epimod_prom, id2symbol, "pCGIs")
-p2 <- plot_fdr_genecount(out_epimod_body, id2symbol, "oCGIs")
+# Plot gene network only for cancer pathways nudged down by ketogenic diet (paper focus)
+# Plot only promoter regions, in epithelial cells
 
-p1_grob <- ggplotify::as.grob(p1) 
-p2_grob <- ggplotify::as.grob(p2) 
+# Select paths manually from heatmap
+paths <- unique(p3@data$outcome)
+paths_plot_prom_up <- gsub("___pCGI hyperM","",paths[grepl("__pCGI hyperM", paths)])
+rem <- c("REACTOME_KIDNEY_DEVELOPMENT", "REACTOME_CARDIOGENESIS","REACTOME_ACTIVATION_OF_TRKA_RECEPTORS")
+paths_plot_prom_up <- setdiff(paths_plot_prom_up, rem)
 
-```
+# Reactome #-----
+gene_reactome_tbl <- readRDS(here("results/0-output/reactome_gene_universe.Rds")) %>%
+  dplyr::select(gene_primary, gs_name) %>%
+  dplyr::filter(gs_name %in% paths_plot_prom_up)
 
-```{r}
+## Promoter#-----
+load(here("results/analysis2_celltype_adj/5-output/out_reactome_promoter_pruned.Rdata"))
+gene_meta <- out$gene_meta
+gene_meta$p_adj_gene <- p.adjust(gene_meta$p_gene, method = "BH")
+gene_meta <- gene_meta %>% dplyr::left_join(gene_reactome_tbl, relationship = "many-to-many")
+gene_metap <- gene_meta %>% dplyr::filter(gs_name %in% paths_plot_prom_up)
+gene_metap$gs_name <- normalize_name(gene_metap$gs_name)
 
-set.seed(321)
-
-# e.g. cancer modules affected by KD
-sig.mods <- out_epimod_prom[[3]] # 12 modules
-weight.g <- out_epimod_prom[[5]]
-pval.v <- out_epimod_prom[[6]]
-stat.v <- out_epimod_prom[[7]]
-
-# Global limits based on nodes/edges of g that will be plotted
-mods_to_plot <- c(2, 3, 6)
-nodes_keep <- unique(unlist(sig.mods[mods_to_plot]))
-g_sub <- induced_subgraph(weight.g, vids = nodes_keep)
-
-# Global limits for vertex color (use all nodes of g that will be plotted)
-sl_sub <- sign(stat.v[nodes_keep]) * -log10(pval.v[nodes_keep])
-
-sl_limits <- c(-max(abs(sl_sub), na.rm = TRUE),
-                max(abs(sl_sub), na.rm = TRUE))
-
-# Global limits for edge weights (use all edges of g that will be plotted)
-w_limits <- range(abs(E(g_sub)$weight), na.rm = TRUE)
-w_all <- abs(E(g_sub)$weight)
-w_breaks <- as.numeric(quantile(w_all, c(0.1, 0.5, 0.9), na.rm = TRUE))
-
-pa <- renderModule_gg(
-  sig.mods[[2]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE
+# Looks cool
+prep <- prepare_bipartite_data(
+  gene_metap,
+  region_var = "promoter",
+  region_value = TRUE,
+  min_genes = 0,
+  p_cutoff = 1,
+  label_thres = 0.75
 )
 
-pb <- renderModule_gg(sig.mods[[3]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE)
-pc <- renderModule_gg(sig.mods[[6]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE)
+prep$edges$neglog10_p <- -log10(prep$edges$p_adj_gene)
+g <- build_bipartite_graph(
+  prep$edges,
+  fill_var = "effect",
+  size_var = "neglog10_p",
+  label_var = "effect",
+  label_threshold = prep$threshold,
+  pathway_size = 10,
+  up_pathways = normalize_name(paths_plot_prom_up),
+  down_pathways = NULL
+)
 
-p5 <- pa + pb + pc + plot_layout(guides = "collect", widths = c(1.5,1,1))
-p5_grob <- ggplotify::as.grob(p5) 
+p4 <- plot_bipartite_graph(
+  g,
+  fill_var = "fill_value",
+  fill_name = "Mean Ctrl ΔExposure",
+  size_name = expression(-log[10](adj. ~ P ~ value)),
+  size_labels = scales::number_format(accuracy = 1),
+  layout = "dh",
+  pathway_colors = c(HypoM = "#4575b4", HyperM = "#d73027"),
+  pathway_legend = TRUE,
+  up_pathways = normalize_name(paths_plot_prom_up),
+  down_pathways = NULL
+)
 
 
 ```
 
-```{r}
-
-set.seed(213)
-
-# Top cancer modules
-sig.mods <- out_epimod_body[[3]] # 12 modules
-weight.g <- out_epimod_body[[5]]
-pval.v <- out_epimod_body[[6]]
-stat.v <- out_epimod_body[[7]]
-
-# Global limits based on nodes/edges of g that will be plotted
-mods_to_plot <- c(1,2,4)
-nodes_keep <- unique(unlist(sig.mods[mods_to_plot]))
-g_sub <- induced_subgraph(weight.g, vids = nodes_keep)
-
-# Global limits for vertex color (use all nodes of g that will be plotted)
-sl_sub <- sign(stat.v[nodes_keep]) * -log10(pval.v[nodes_keep])
-
-sl_limits <- c(-max(abs(sl_sub), na.rm = TRUE),
-                max(abs(sl_sub), na.rm = TRUE))
-
-# Global limits for edge weights (use all edges of g that will be plotted)
-w_limits <- range(abs(E(g_sub)$weight), na.rm = TRUE)
-w_all <- abs(E(g_sub)$weight)
-w_breaks <- as.numeric(quantile(w_all, c(0.1, 0.5, 0.9), na.rm = TRUE))
-
-pa <- renderModule_gg(
-  sig.mods[[1]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE
-)
-
-pb <- renderModule_gg(
-  sig.mods[[4]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE
-)
-
-pc <- renderModule_gg(
-  sig.mods[[2]],
-  weight.g,
-  pval.v,
-  stat.v,
-  vertex_cols = c("#4575b4", "#d73027", mid = "white"),
-  k = 50,
-  id2symbol = id2symbol,
-  use_symbols = TRUE,
-  sl_limits = sl_limits,
-  w_limits = w_limits,
-  w_breaks  = w_breaks,
-  edge_width_range = c(0.3, 2),
-  edge_use_abs = TRUE,
-  show_legends = TRUE
-)
-
-p6 <- pa + pb + pc + plot_layout(guides = "collect", widths = c(1.5,1,1))
-p6_grob <- ggplotify::as.grob(p6) 
-
-```
-
-```{r, fig.height=15, fig.width=16}
+```{r, fig.height=21, fig.width=16}
 
 
 # combine plots #----
 invisible(grid.arrange(
   grobs = list(
-    arrangeGrob(p1_grob, top = textGrob(
+    arrangeGrob(p1, top = textGrob(
       "a",
       gp = gpar(fontsize = 12, fontface = "bold"),
       x = unit(0, "npc"),
@@ -285,26 +401,25 @@ invisible(grid.arrange(
       x = unit(0, "npc"),
       hjust = 0
     )),
-    arrangeGrob(p5_grob, top = textGrob(
-      "c pCGIs, example EpiMods",
+    arrangeGrob(p3_grob, top = textGrob(
+      "c",
       gp = gpar(fontsize = 12, fontface = "bold"),
       x = unit(0, "npc"),
       hjust = 0
     )),
-    arrangeGrob(p6_grob, top = textGrob(
-      "d oCGIs, example EpiMods",
+    arrangeGrob(p4, top = textGrob(
+      "d pCGI effects modulated by KD in epithelial cells",
       gp = gpar(fontsize = 12, fontface = "bold"),
       x = unit(0, "npc"),
       hjust = 0
     ))
   ),
-  layout_matrix = rbind(c(1,2),
+  layout_matrix = rbind(c(1,3),
+                        c(2,3),
                         c(NA,NA),
-                        c(3,3),
-                        c(NA,NA),
-                        c(4,4)),
-  heights = c(4,0.5,4,0.5,4)
+                        c(4,4)), 
+  heights = c(4,4,0.5,10),
+  widths = c(6,10)
 ))
 ```
-
 
